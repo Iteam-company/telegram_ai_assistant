@@ -1,6 +1,7 @@
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
+import { OpenAIException } from './openai.exceptions';
 
 interface ChatHistory {
   [chatId: number]: Array<OpenAI.Chat.ChatCompletionMessageParam>;
@@ -51,7 +52,7 @@ export class OpenaiService {
     } catch (error) {
       this.logger.error('OpenAI API Error:', error);
       const status = error.response?.status || error.status || 500;
-      throw new HttpException(error.message, status);
+      throw new OpenAIException(error.message, error, status);
     }
   }
 

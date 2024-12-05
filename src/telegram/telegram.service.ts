@@ -1,10 +1,13 @@
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { OpenaiService } from 'src/openai/openai.service';
 import { TelegramMessage } from './interfaces/telegram-message.interface';
 import { TelegramUpdate } from './interfaces/telegram-update.interface';
-import { TelegramException } from './telegram.exceptions';
+import {
+  TelegramException,
+  TelegramUnknownCommandException,
+} from './telegram.exceptions';
 
 @Injectable()
 export class TelegramService {
@@ -38,7 +41,11 @@ export class TelegramService {
     const { data } = await firstValueFrom(response);
 
     if (!data.ok) {
-      throw new TelegramException('Failed to send message', data);
+      throw new TelegramException(
+        'Failed to send message',
+        data,
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     return data.ok;
@@ -52,7 +59,11 @@ export class TelegramService {
     const { data } = await firstValueFrom(response);
 
     if (!data.ok) {
-      throw new TelegramException('Failed to send message', data);
+      throw new TelegramException(
+        'Failed to send chat action',
+        data,
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     return data.ok;
@@ -67,7 +78,11 @@ export class TelegramService {
     const { data } = await firstValueFrom(response);
 
     if (!data.ok) {
-      throw new TelegramException('Failed to set webhook', data);
+      throw new TelegramException(
+        'Failed to set webhook',
+        data,
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     return data.ok;
@@ -99,15 +114,10 @@ export class TelegramService {
     const { command, content } = this.parseCommand(text);
     const handler = this.commands.get(command);
 
-    // Handle unknown commands ("/unknowncommand", "/something")
-    // Note. Empty string is a command for conversation with AI
     if (!handler) {
-      return await this.sendMessage(
-        "Unknown command received. Please type '/help' to get list of commands.",
-      );
+      throw new TelegramUnknownCommandException(command);
     }
 
-    // Call used to bound 'this' in handler-methods
     const responseMessage = await handler.call(this, content);
     return await this.sendMessage(responseMessage);
   }
