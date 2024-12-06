@@ -1,9 +1,13 @@
-import { Module } from '@nestjs/common';
-import { TelegramService } from './telegram.service';
+import { BullModule } from '@nestjs/bull';
+import { MessagesProcessor } from './processors/telegram.message.processor';
+import { NotificationsProcessor } from './processors/telegram.notifications.processor';
+import { RemindersProcessor } from './processors/telegram.reminders,processor';
 import { TelegramController } from './telegram.controller';
+import { TelegramService } from './telegram.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
 import { OpenaiModule } from 'src/openai/openai.module';
+import { Module } from '@nestjs/common';
 
 @Module({
   imports: [
@@ -22,8 +26,18 @@ import { OpenaiModule } from 'src/openai/openai.module';
       }),
       inject: [ConfigService],
     }),
+    BullModule.registerQueue(
+      { name: 'messages' },
+      { name: 'reminders' },
+      { name: 'notifications' },
+    ),
   ],
-  providers: [TelegramService],
+  providers: [
+    TelegramService,
+    MessagesProcessor,
+    RemindersProcessor,
+    NotificationsProcessor,
+  ],
   controllers: [TelegramController],
 })
 export class TelegramModule {}
