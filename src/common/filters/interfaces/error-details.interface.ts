@@ -7,3 +7,11 @@ export interface ErrorResponse {
   body?: any;
   stack?: string;
 }
+
+export interface ErrorDetails {
+  type: string;
+  error: string;
+  status: number;
+  details?: any;
+  stack?: string;
+}

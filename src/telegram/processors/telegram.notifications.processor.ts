@@ -15,7 +15,7 @@ export class NotificationsProcessor {
     const { chatId } = job.data;
     try {
       await this.telegramService.sendMessage(
-        "Hey! We haven't heard from you for a while. How are you doing?",
+        "👋 Hey! We haven't heard from you for a while. How are you doing?",
         chatId,
       );
       this.logger.log(`Sent inactivity alert to chat ${chatId}`);

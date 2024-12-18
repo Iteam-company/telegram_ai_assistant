@@ -2,20 +2,21 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { OpenAIException } from './openai.exceptions';
-
-interface ChatHistory {
-  [chatId: number]: Array<OpenAI.Chat.ChatCompletionMessageParam>;
-}
+import { ChatService } from 'src/chat/chat.service';
+import { Message } from 'src/chat/chat.schema';
 
 @Injectable()
 export class OpenaiService {
   private readonly logger = new Logger(OpenaiService.name);
   private openai: OpenAI;
-  private chatHistories: ChatHistory = {};
+  private chatHistory: Omit<Message, 'timestamp'>[] = [];
   private MAX_HISTORY: number;
   private MODEL: string;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private chatService: ChatService,
+  ) {
     this.openai = new OpenAI({
       apiKey: this.configService.get<string>('OPENAI_API_KEY'),
     });
@@ -26,27 +27,24 @@ export class OpenaiService {
 
   async getResponse(chatId: number, message: string): Promise<string> {
     try {
-      if (!this.chatHistories[chatId]) {
-        this.chatHistories[chatId] = [];
-      }
+      this.chatHistory = await this.chatService.getConversationHistory(chatId);
 
-      this.chatHistories[chatId].push({ role: 'user', content: message });
-
-      if (this.chatHistories[chatId].length > this.MAX_HISTORY) {
-        this.chatHistories[chatId] = this.chatHistories[chatId].slice(
-          -this.MAX_HISTORY,
-        );
-      }
+      this.chatHistory.push({ role: 'user', content: message });
 
       const completion = await this.openai.chat.completions.create({
-        messages: this.chatHistories[chatId],
+        messages: this.chatHistory,
         model: this.MODEL,
       });
 
       const response =
         completion.choices[0].message.content ||
         'Sorry, I could not process that.';
-      this.chatHistories[chatId].push({ role: 'assistant', content: response });
+      this.chatHistory.push({ role: 'assistant', content: response });
+
+      // Something like max-history control. Should be in chat service
+      // if (this.chatHistory.length > this.MAX_HISTORY) {
+      //   this.chatHistory = this.chatHistory.slice(-this.MAX_HISTORY + 1);
+      // }
 
       return response;
     } catch (error) {
@@ -54,9 +52,5 @@ export class OpenaiService {
       const status = error.response?.status || error.status || 500;
       throw new OpenAIException(error.message, error, status);
     }
-  }
-
-  resetHistory(chatId: number): void {
-    this.chatHistories[chatId] = [];
   }
 }

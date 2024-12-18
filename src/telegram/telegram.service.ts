@@ -2,7 +2,7 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, min } from 'rxjs';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { OpenaiService } from 'src/openai/openai.service';
 import {
@@ -16,6 +16,7 @@ import {
 } from './telegram.exceptions';
 import { TelegramUpdate } from './interfaces/telegram-update.interface';
 import { TelegramMessage } from './interfaces/telegram-message.interface';
+import { ChatService } from 'src/chat/chat.service';
 
 @Injectable()
 export class TelegramService {
@@ -25,11 +26,12 @@ export class TelegramService {
     (string?) => Promise<string> | string
   >();
   private chatId: number;
-  private userLastActivity: Map<number, Date> = new Map();
+  private inactiveMinutesThreshold: number = 1;
 
   constructor(
     private httpService: HttpService,
     private openaiService: OpenaiService,
+    private chatService: ChatService,
     @InjectQueue('messages') private messagesQueue: Queue<MessageJobData>,
     @InjectQueue('reminders') private remindersQueue: Queue<ReminderJobData>,
     @InjectQueue('notifications')
@@ -69,9 +71,13 @@ export class TelegramService {
     return data.ok;
   }
 
-  async sendChatAction(action: string): Promise<boolean> {
+  async sendChatAction(
+    action: string,
+    specificChatId?: number,
+  ): Promise<boolean> {
+    const chatId = specificChatId || this.chatId;
     const response = this.httpService.post('sendChatAction', {
-      chat_id: this.chatId,
+      chat_id: chatId,
       action: action,
     });
     const { data } = await firstValueFrom(response);
@@ -107,6 +113,11 @@ export class TelegramService {
   }
 
   async handleUpdate(update: TelegramUpdate) {
+    this.chatId =
+      update.message.chat.id || update.callback_query.message.chat.id;
+    await this.chatService.findOrCreateChat(this.chatId);
+    await this.chatService.updateLastActivity(this.chatId);
+
     if (update.message) {
       await this.handleMessage(update.message);
     } else if (update.callback_query) {
@@ -115,9 +126,6 @@ export class TelegramService {
   }
 
   private async handleMessage(message: TelegramMessage) {
-    this.chatId = message.chat.id;
-    this.userLastActivity.set(message.chat.id, new Date());
-
     const text = message.text;
     if (text) {
       await this.handleTextMessages(text);
@@ -125,7 +133,6 @@ export class TelegramService {
   }
 
   private async handleCallbackQuery(callbackQuery: any) {
-    this.chatId = callbackQuery.message.chat.id;
     await this.sendMessage(`Callback received: ${callbackQuery.data}`);
   }
 
@@ -179,7 +186,7 @@ export class TelegramService {
   }
 
   private async handleHistoryReset() {
-    await this.openaiService.resetHistory(this.chatId);
+    await this.chatService.clearConversationHistory(this.chatId);
     return 'Conversation history has been reset.';
   }
 
@@ -210,7 +217,11 @@ export class TelegramService {
       }
 
       const cronPattern = `${minutes} ${hours} * * *`;
-      const jobId = `${this.chatId}-${hours}-${minutes}`;
+
+      const formatedMinutes = minutes <= 9 ? `0${minutes}` : `${minutes}`;
+      const formatedHours = hours <= 9 ? `0${hours}` : `${hours}`;
+
+      const jobId = `${this.chatId}-${formatedHours}-${formatedMinutes}`;
 
       await this.remindersQueue.add(
         'daily-reminder',
@@ -303,32 +314,31 @@ export class TelegramService {
 
       const jobsList = userJobs
         .map((job) => {
-          const [minutes, hours] = job.cron.split(' ');
-          return `🕒 ${hours}:${minutes} - Job ID: <code>${job.id}</code>🕒`;
+          let [minutes, hours] = job.cron.split(' ');
+          minutes = minutes.length < 2 ? `0${minutes}` : `${minutes}`;
+          hours = hours.length < 2 ? `0${hours}` : `${hours}`;
+          return `🕒 <b>${hours}:${minutes}</b> - ID: <code>${job.id}</code> 🕒`;
         })
         .join('\n');
 
-      return `Your scheduled messages:\n${jobsList}`;
+      return `Your scheduled messages:\n${jobsList}\nYou can use message ID to remove it from schedule`;
     } catch (error) {
       this.logger.error('List scheduled error:', error);
       return 'Failed to list scheduled messages. Please try again.';
     }
   }
 
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_MINUTE)
   async checkInactiveUsers() {
-    const now = new Date();
-    for (const [chatId, lastActivity] of this.userLastActivity.entries()) {
-      const hoursSinceLastActivity =
-        (now.getTime() - lastActivity.getTime()) / (1000 * 60 * 60);
-
-      if (hoursSinceLastActivity >= 1) {
-        await this.notificationsQueue.add('inactivity', {
-          chatId,
-          type: 'inactivity',
-          createdAt: new Date(),
-        });
-      }
+    const inactiveChats = await this.chatService.getInactiveChats(
+      this.inactiveMinutesThreshold,
+    );
+    for (const chat of inactiveChats) {
+      await this.notificationsQueue.add('inactivity', {
+        chatId: chat.chatId,
+        type: 'inactivity',
+        createdAt: new Date(),
+      });
     }
   }
 }

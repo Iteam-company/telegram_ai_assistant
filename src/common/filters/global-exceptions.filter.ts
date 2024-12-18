@@ -9,86 +9,18 @@ import {
 import { HttpAdapterHost } from '@nestjs/core';
 import { Request, Response } from 'express';
 import { TelegramService } from 'src/telegram/telegram.service';
-import { OpenAIException } from 'src/openai/openai.exceptions';
-import { TelegramException } from 'src/telegram/telegram.exceptions';
+import { OpenAIException } from '../exceptions/openai.exception';
+import { TelegramException } from '../exceptions/telegram.exception';
+import { Error as MongooseError } from 'mongoose';
+import { ErrorDetails } from './interfaces/error-details.interface';
+import { OpenAIErrorHandler } from './handlers/openai-error.handler';
+import { TelegramErrorHandler } from './handlers/telegram-error.handler';
+import { MongooseErrorHandler } from './handlers/mongoose-error.handler';
+import { ErrorMessageMap } from './error-message.map';
 
 @Catch()
 export class GlobalExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionsFilter.name);
-
-  private readonly errorMessages = new Map<string, string>([
-    // OpenAI specific errors
-    [
-      'OpenAIException:rate_limit_exceeded',
-      '⏳ Rate limit exceeded. Please try again later.',
-    ],
-    [
-      'OpenAIException:context_length_exceeded',
-      '📝 Message is too long. Please send a shorter message.',
-    ],
-    [
-      'OpenAIException:invalid_api_key',
-      '🔑 Authentication error. Please contact the administrator.',
-    ],
-    [
-      'OpenAIException:insufficient_quota',
-      '💰 Usage limit reached. Please try again tomorrow or contact the administrator.',
-    ],
-    [
-      'OpenAIException:invalid_request_error',
-      '❌ Invalid request to AI service.',
-    ],
-    [
-      'OpenAIException:model_not_found',
-      '🤖 Selected AI model is currently unavailable.',
-    ],
-    [
-      'OpenAIException:server_error',
-      '🔧 AI service is experiencing issues. Please try again later.',
-    ],
-
-    // Telegram specific errors
-    [
-      'TelegramException:UNKNOWN_COMMAND',
-      "📃 Unknown command received. Please type '/help' to get list of commands.",
-    ],
-    ['TelegramException:FORBIDDEN', '🚫 Bot was blocked by the user or chat.'],
-    [
-      'TelegramException:TOO_MANY_REQUESTS',
-      '⏳ Too many requests. Please wait a moment.',
-    ],
-    ['TelegramException:BAD_REQUEST', '❌ Invalid request to Telegram.'],
-    ['TelegramException:UNAUTHORIZED', '🔑 Bot token is invalid.'],
-    [
-      'TelegramException:FLOOD_WAIT',
-      '⌛ Please wait before sending more messages.',
-    ],
-    [
-      'TelegramException:MESSAGE_TOO_LONG',
-      '📝 Message is too long for Telegram.',
-    ],
-    ['TelegramException:CHAT_NOT_FOUND', '🔍 Chat was not found.'],
-    [
-      'TelegramException:USER_DEACTIVATED',
-      '👤 User has deleted their account.',
-    ],
-    ['TelegramException:BLOCKED_BY_USER', '🚫 User has blocked the bot.'],
-    ['TelegramException:RESPONSE_TIMEOUT', '⏱️ Telegram response timeout.'],
-
-    // Default HTTP status errors
-    ['default:400', '❌ Bad request. Please try again.'],
-    [
-      'default:401',
-      '🔑 Authentication error. Please contact the administrator.',
-    ],
-    ['default:403', '🚫 Access forbidden.'],
-    ['default:404', '🔍 Resource not found.'],
-    ['default:429', '⏳ Too many requests. Please wait a minute.'],
-    ['default:500', '🔧 Server error. Please try again later.'],
-    ['default:502', '🌐 Bad gateway. Please try again later.'],
-    ['default:503', '🏥 Service temporarily unavailable.'],
-    ['default:504', '⌛ Gateway timeout. Please try again later.'],
-  ]);
 
   constructor(
     private readonly httpAdapterHost: HttpAdapterHost,
@@ -101,53 +33,33 @@ export class GlobalExceptionsFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
     const response = ctx.getResponse<Response>();
 
-    const errorDetails = this.getErrorDetails(exception);
-    const userMessage = this.getUserFriendlyMessage(errorDetails);
+    const errorDetails = this.identifyError(exception);
+    const userMessage = ErrorMessageMap.getUserFriendlyMessage(errorDetails);
 
-    const errorResponse = {
-      statusCode: errorDetails.status,
-      timestamp: new Date().toISOString(),
-      path: httpAdapter.getRequestUrl(request),
-      message: userMessage,
-      error: errorDetails.error,
-      ...(process.env.NODE_ENV !== 'production' && {
-        details: errorDetails.details,
-        stack: errorDetails.stack,
-      }),
-    };
+    const errorResponse = this.createErrorResponse(
+      request,
+      errorDetails,
+      userMessage,
+    );
 
     this.logError(errorDetails, errorResponse);
 
-    httpAdapter.reply(response, errorResponse, HttpStatus.OK);
-
     await this.handleTelegramError(request, userMessage);
+
+    httpAdapter.reply(response, errorResponse, HttpStatus.OK);
   }
 
-  private getErrorDetails(exception: any): {
-    type: string;
-    error: string;
-    status: number;
-    details?: any;
-    stack?: string;
-  } {
+  private identifyError(exception: unknown): ErrorDetails {
     if (exception instanceof OpenAIException) {
-      return {
-        type: 'OpenAIException',
-        error: this.parseOpenAIError(exception),
-        status: exception.getStatus(),
-        details: exception.getResponse(),
-        stack: exception.stack,
-      };
+      return OpenAIErrorHandler.handle(exception);
     }
 
     if (exception instanceof TelegramException) {
-      return {
-        type: 'TelegramException',
-        error: this.parseTelegramError(exception),
-        status: exception.getStatus(),
-        details: exception.getResponse(),
-        stack: exception.stack,
-      };
+      return TelegramErrorHandler.handle(exception);
+    }
+
+    if (this.isMongooseError(exception)) {
+      return MongooseErrorHandler.handle(exception);
     }
 
     if (exception instanceof HttpException) {
@@ -170,142 +82,41 @@ export class GlobalExceptionsFilter implements ExceptionFilter {
     };
   }
 
-  private parseOpenAIError(exception: OpenAIException): string {
-    const response = exception.getResponse() as any;
-    const errorDetails = response?.details?.error || {};
-
-    // Get error information from various possible locations
-    const code = errorDetails.code || response.code;
-    const type = errorDetails.type || response.type;
-    const message = (
-      errorDetails.message ||
-      response.message ||
-      ''
-    ).toLowerCase();
-
-    // Check specific error codes/types first
-    if (code === 'insufficient_quota' || type === 'insufficient_quota') {
-      return 'insufficient_quota';
-    }
-
-    if (
-      code === 'rate_limit_exceeded' ||
-      type === 'rate_limit_exceeded' ||
-      message.includes('rate limit')
-    ) {
-      return 'rate_limit_exceeded';
-    }
-
-    if (message.includes('context length')) {
-      return 'context_length_exceeded';
-    }
-
-    if (
-      message.includes('invalid api key') ||
-      message.includes('incorrect api key') ||
-      message.includes('no api key')
-    ) {
-      return 'invalid_api_key';
-    }
-
-    if (
-      message.includes('model not found') ||
-      message.includes('model does not exist')
-    ) {
-      return 'model_not_found';
-    }
-
-    if (
-      type === 'invalid_request_error' ||
-      message.includes('invalid request')
-    ) {
-      return 'invalid_request_error';
-    }
-
-    // Server errors
-    if (message.includes('server error') || response.status >= 500) {
-      return 'server_error';
-    }
-
-    return 'UNKNOWN_ERROR';
-  }
-
-  private parseTelegramError(exception: TelegramException): string {
-    const response = exception.getResponse() as any;
-    const telegramResponse = response?.response || {};
-
-    // Check if it's unknown command error
-    if (telegramResponse.command !== undefined) {
-      return 'UNKNOWN_COMMAND';
-    }
-
-    // Get error information from various possible locations
-    const errorCode = telegramResponse.error_code;
-    const description = (telegramResponse.description || '').toUpperCase();
-
-    // Match specific Telegram error codes
-    if (errorCode === 403 || description.includes('FORBIDDEN')) {
-      return 'FORBIDDEN';
-    }
-
-    if (errorCode === 429 || description.includes('TOO MANY REQUESTS')) {
-      return 'TOO_MANY_REQUESTS';
-    }
-
-    if (errorCode === 400 && !description) {
-      return 'BAD_REQUEST';
-    }
-
-    if (errorCode === 401 || description.includes('UNAUTHORIZED')) {
-      return 'UNAUTHORIZED';
-    }
-
-    // Check error descriptions for specific cases
-    if (description.includes('FLOOD')) {
-      return 'FLOOD_WAIT';
-    }
-
-    if (description.includes('MESSAGE IS TOO LONG')) {
-      return 'MESSAGE_TOO_LONG';
-    }
-
-    if (description.includes('CHAT NOT FOUND')) {
-      return 'CHAT_NOT_FOUND';
-    }
-
-    if (description.includes('USER IS DEACTIVATED')) {
-      return 'USER_DEACTIVATED';
-    }
-
-    if (
-      description.includes('USER BLOCKED') ||
-      description.includes('BOT BLOCKED')
-    ) {
-      return 'BLOCKED_BY_USER';
-    }
-
-    if (description.includes('TIMEOUT') || description.includes('TIME OUT')) {
-      return 'RESPONSE_TIMEOUT';
-    }
-
-    return 'UNKNOWN_ERROR';
-  }
-
-  private getUserFriendlyMessage(errorDetails: {
-    type: string;
-    error: string;
-    status: number;
-  }): string {
-    const specificKey = `${errorDetails.type}:${errorDetails.error}`;
-    if (this.errorMessages.has(specificKey)) {
-      return this.errorMessages.get(specificKey);
-    }
-
-    const defaultKey = `default:${errorDetails.status}`;
+  private isMongooseError(error: unknown): boolean {
     return (
-      this.errorMessages.get(defaultKey) ||
-      '❌ Something went wrong. Please try again later.'
+      error instanceof MongooseError.ValidationError ||
+      error instanceof MongooseError.CastError ||
+      error instanceof MongooseError.DocumentNotFoundError ||
+      error instanceof MongooseError.ParallelSaveError ||
+      error instanceof MongooseError.StrictModeError ||
+      error instanceof MongooseError.VersionError ||
+      this.isMongoError(error)
     );
+  }
+
+  private isMongoError(error: any): boolean {
+    return (
+      error?.name?.includes('MongoError') ||
+      error?.name?.includes('MongooseError')
+    );
+  }
+
+  private createErrorResponse(
+    request: Request,
+    errorDetails: ErrorDetails,
+    userMessage: string,
+  ) {
+    return {
+      statusCode: errorDetails.status,
+      timestamp: new Date().toISOString(),
+      path: this.httpAdapterHost.httpAdapter.getRequestUrl(request),
+      message: userMessage,
+      error: errorDetails.error,
+      ...(process.env.NODE_ENV !== 'production' && {
+        details: errorDetails.details,
+        stack: errorDetails.stack,
+      }),
+    };
   }
 
   private async handleTelegramError(
@@ -313,10 +124,7 @@ export class GlobalExceptionsFilter implements ExceptionFilter {
     userMessage: string,
   ): Promise<void> {
     try {
-      const chatId =
-        request.body?.message?.chat?.id ||
-        request.body?.callback_query?.message?.chat?.id;
-
+      const chatId = this.extractChatId(request);
       if (chatId) {
         await this.telegramService.sendMessage(userMessage);
       }
@@ -328,10 +136,14 @@ export class GlobalExceptionsFilter implements ExceptionFilter {
     }
   }
 
-  private logError(
-    errorDetails: { type: string; error: string; status: number },
-    fullError: any,
-  ): void {
+  private extractChatId(request: Request): number | undefined {
+    return (
+      request.body?.message?.chat?.id ||
+      request.body?.callback_query?.message?.chat?.id
+    );
+  }
+
+  private logError(errorDetails: ErrorDetails, fullError: any): void {
     const message = `[${errorDetails.type}] ${errorDetails.error}`;
 
     if (errorDetails.status >= 500) {

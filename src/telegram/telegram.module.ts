@@ -8,11 +8,13 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
 import { OpenaiModule } from 'src/openai/openai.module';
 import { Module } from '@nestjs/common';
+import { ChatModule } from 'src/chat/chat.module';
 
 @Module({
   imports: [
     ConfigModule,
     OpenaiModule,
+    ChatModule,
     HttpModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
