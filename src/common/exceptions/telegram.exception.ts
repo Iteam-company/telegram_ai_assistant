@@ -23,3 +23,9 @@ export class TelegramUnknownCommandException extends TelegramException {
     super('Unknown command', { command }, HttpStatus.BAD_REQUEST);
   }
 }
+
+export class TelegramWarningException extends TelegramException {
+  constructor(message: string) {
+    super(message, { warning: true }, HttpStatus.OK);
+  }
+}

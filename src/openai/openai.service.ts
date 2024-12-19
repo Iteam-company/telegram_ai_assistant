@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
-import { OpenAIException } from './openai.exceptions';
+import { OpenAIException } from '../common/exceptions/openai.exception';
 import { ChatService } from 'src/chat/chat.service';
 import { Message } from 'src/chat/chat.schema';
 
@@ -27,26 +27,33 @@ export class OpenaiService {
 
   async getResponse(chatId: number, message: string): Promise<string> {
     try {
-      this.chatHistory = await this.chatService.getConversationHistory(chatId);
+      // const dialogPart = [];
+      // this.chatHistory = await this.chatService.getConversationHistory(chatId);
 
-      this.chatHistory.push({ role: 'user', content: message });
+      // this.chatHistory.push({ role: 'user', content: message });
+      // dialogPart.push({ role: 'user', content: message });
 
-      const completion = await this.openai.chat.completions.create({
-        messages: this.chatHistory,
-        model: this.MODEL,
-      });
+      // const completion = await this.openai.chat.completions.create({
+      //   messages: this.chatHistory,
+      //   model: this.MODEL,
+      // });
 
-      const response =
-        completion.choices[0].message.content ||
-        'Sorry, I could not process that.';
-      this.chatHistory.push({ role: 'assistant', content: response });
+      // const response =
+      //   completion.choices[0].message.content ||
+      //   'Sorry, I could not process that.';
 
-      // Something like max-history control. Should be in chat service
-      // if (this.chatHistory.length > this.MAX_HISTORY) {
-      //   this.chatHistory = this.chatHistory.slice(-this.MAX_HISTORY + 1);
-      // }
+      // this.chatHistory.push({ role: 'assistant', content: response });
+      // dialogPart.push({ role: 'assistant', content: response });
 
-      return response;
+      // this.chatService.pushMessagesWithMaxHistory(
+      //   chatId,
+      //   dialogPart,
+      //   this.MAX_HISTORY,
+      // );
+
+      // return response;
+
+      return `Ok: ${message}`;
     } catch (error) {
       this.logger.error('OpenAI API Error:', error);
       const status = error.response?.status || error.status || 500;

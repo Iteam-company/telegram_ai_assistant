@@ -1,8 +1,10 @@
 import { ErrorDetails } from '../interfaces/error-details.interface';
 import { TelegramException } from '../../exceptions/telegram.exception';
+import { HttpStatus } from '@nestjs/common';
 
 export class TelegramErrorHandler {
   private static errorTypes = {
+    WARNING: 'WARNING',
     UNKNOWN_COMMAND: 'UNKNOWN_COMMAND',
     FORBIDDEN: 'FORBIDDEN',
     TOO_MANY_REQUESTS: 'TOO_MANY_REQUESTS',
@@ -18,6 +20,21 @@ export class TelegramErrorHandler {
 
   static handle(exception: TelegramException): ErrorDetails {
     const response = exception.getResponse() as any;
+
+    // Special handling for warnings
+    if (response?.response?.warning) {
+      return {
+        type: 'TelegramException',
+        error: this.errorTypes.WARNING,
+        status: HttpStatus.OK,
+        details: {
+          message: response.message,
+        },
+        isWarning: true, // Flag to indicate this is a warning
+        stack: exception.stack,
+      };
+    }
+
     const telegramResponse = response?.response || {};
 
     const error = this.identifyError(telegramResponse);

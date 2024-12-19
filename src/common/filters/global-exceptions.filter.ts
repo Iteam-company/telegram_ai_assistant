@@ -144,6 +144,11 @@ export class GlobalExceptionsFilter implements ExceptionFilter {
   }
 
   private logError(errorDetails: ErrorDetails, fullError: any): void {
+    // Skip logging for warnings
+    if (errorDetails.isWarning) {
+      return;
+    }
+
     const message = `[${errorDetails.type}] ${errorDetails.error}`;
 
     if (errorDetails.status >= 500) {

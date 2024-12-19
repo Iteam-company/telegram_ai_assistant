@@ -9,12 +9,14 @@ import { HttpModule } from '@nestjs/axios';
 import { OpenaiModule } from 'src/openai/openai.module';
 import { Module } from '@nestjs/common';
 import { ChatModule } from 'src/chat/chat.module';
+import { RedisModule } from 'src/redis/redis.module';
 
 @Module({
   imports: [
     ConfigModule,
     OpenaiModule,
     ChatModule,
+    RedisModule,
     HttpModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({

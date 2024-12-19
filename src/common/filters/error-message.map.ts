@@ -90,6 +90,10 @@ export class ErrorMessageMap {
   ]);
 
   static getUserFriendlyMessage(errorDetails: ErrorDetails): string {
+    if (errorDetails?.isWarning) {
+      return errorDetails.details.message;
+    }
+
     const specificKey = `${errorDetails.type}:${errorDetails.error}`;
     if (this.errorMessages.has(specificKey)) {
       return this.errorMessages.get(specificKey);

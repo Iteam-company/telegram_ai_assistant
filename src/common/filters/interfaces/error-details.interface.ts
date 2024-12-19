@@ -14,4 +14,5 @@ export interface ErrorDetails {
   status: number;
   details?: any;
   stack?: string;
+  isWarning?: boolean;
 }

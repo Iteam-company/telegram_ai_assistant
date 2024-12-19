@@ -52,6 +52,26 @@ export class ChatService {
     );
   }
 
+  async pushMessagesWithMaxHistory(
+    chatId: number,
+    messages: Omit<Message, 'timestamp'>[],
+    maxLength: number = 10,
+  ): Promise<void> {
+    if (!messages?.length) {
+      return;
+    }
+
+    let chat = await this.chatModel.findOne({ chatId });
+
+    chat.messages.push(...messages);
+
+    if (chat.messages.length > maxLength) {
+      chat.messages.splice(0, chat.messages.length - maxLength);
+    }
+
+    await chat.save();
+  }
+
   async getConversationHistory(
     chatId: number,
     timestamps: boolean = false,

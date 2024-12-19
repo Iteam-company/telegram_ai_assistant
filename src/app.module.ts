@@ -6,6 +6,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { TelegramModule } from './telegram/telegram.module';
 import { OpenaiModule } from './openai/openai.module';
 import { ChatModule } from './chat/chat.module';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
   imports: [
@@ -14,7 +15,7 @@ import { ChatModule } from './chat/chat.module';
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
-        const uri = configService.get<string>('MONGODB_URI');
+        const uri = configService.get<string>('MONGO_URI');
         return {
           uri,
           retryAttempts: 3,
@@ -47,6 +48,7 @@ import { ChatModule } from './chat/chat.module';
       }),
       inject: [ConfigService],
     }),
+    RedisModule,
     TelegramModule,
     OpenaiModule,
     ChatModule,
