@@ -23,15 +23,12 @@ export class ChatService {
   }
 
   async updateLastActivity(chatId: number): Promise<void> {
-    await this.chatModel.updateOne(
-      { chatId },
-      {
-        $set: {
-          lastActivity: new Date(),
-          isActive: true,
-        },
-      },
-    );
+    let chat = await this.findOrCreateChat(chatId);
+
+    chat.lastActivity = new Date();
+    chat.isActive = true;
+
+    await chat.save();
   }
 
   async addMessage(

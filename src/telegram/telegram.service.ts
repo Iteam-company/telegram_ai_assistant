@@ -2,7 +2,7 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
-import { firstValueFrom, min } from 'rxjs';
+import { firstValueFrom } from 'rxjs';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { OpenaiService } from 'src/openai/openai.service';
 import {
@@ -46,12 +46,16 @@ export class TelegramService {
 
   private registerCommands() {
     this.commands.set('', this.handleAI);
-    this.commands.set('/resethistory', this.handleHistoryReset);
+    this.commands.set('/reset_history', this.handleHistoryReset);
     this.commands.set('/start', this.handleStart);
     this.commands.set('/help', this.handleHelp);
+    this.commands.set('/cancel', this.handleCancel);
     this.commands.set('/schedule', this.handleSchedule);
-    this.commands.set('/reminder', this.handleReminder);
+    this.commands.set('/remind', this.handleReminder);
+    this.commands.set('/nevermind', this.handleRemoveReminder);
+    this.commands.set('/_rem_', this.handleRemoveReminder);
     this.commands.set('/unschedule', this.handleUnschedule);
+    this.commands.set('/_del_', this.handleUnschedule);
     this.commands.set('/list_scheduled', this.handleListScheduled);
   }
 
@@ -120,7 +124,6 @@ export class TelegramService {
     this.chatId =
       update.message.chat.id || update.callback_query.message.chat.id;
 
-    await this.chatService.findOrCreateChat(this.chatId);
     await this.chatService.updateLastActivity(this.chatId);
 
     if (update.message) {
@@ -142,24 +145,26 @@ export class TelegramService {
   }
 
   private async handleTextMessages(text: string): Promise<boolean> {
-    const state = await this.commandStateService.getCommandState(this.chatId);
-
-    if (state?.awaitingResponse) {
-      return await this.handleCommandResponse(state, text);
-    }
-
+    // Command/content parsing and choosing the right handler
     const { command, content } = this.parseCommand(text);
     const handler = this.commands.get(command);
-
     if (!handler) {
       throw new TelegramUnknownCommandException(command);
     }
 
+    // Last command await for the responce (required data)
+    const state = await this.commandStateService.getCommandState(this.chatId);
+    if (state?.awaitingResponse && !(command && command === '/cancel')) {
+      return await this.handleCommandResponse(state, text);
+    }
+
+    // Inline command type: '/schedule 12:20 Hello'
     if (content && this.supportsDirectInput(command)) {
       const responseMessage = await handler.call(this, content);
       return await this.sendMessage(responseMessage);
     }
 
+    // Only command recieved. Awaiting required data from user: setting last command state
     if (!content && this.requiresResponse(command)) {
       await this.commandStateService.setCommandState(this.chatId, {
         command,
@@ -170,6 +175,7 @@ export class TelegramService {
       return await this.sendMessage(this.getPromptForCommand(command));
     }
 
+    // The rest cases
     const responseMessage = await handler.call(this, content);
     return await this.sendMessage(responseMessage);
   }
@@ -185,6 +191,12 @@ export class TelegramService {
     // Only command
     const firstSpaceIndex = trimmedInput.indexOf(' ');
     if (firstSpaceIndex === -1) {
+      // Command with this syntax: "/_del_123456789_12_34"
+      const match = trimmedInput.match(/^(\/\_[a-zA-Z]+\_)(\S+)$/);
+      if (match) {
+        return { command: match[1], content: match[2] };
+      }
+      // Single command
       return { command: trimmedInput, content: '' };
     }
 
@@ -194,23 +206,28 @@ export class TelegramService {
     };
   }
 
+  private getFirstAndRest(input: string): { first: string; rest: string } {
+    const trimmedInput = input.trim();
+    const firstSpaceIndex = trimmedInput.indexOf(' ');
+    return {
+      first: trimmedInput.slice(0, firstSpaceIndex),
+      rest: trimmedInput.slice(firstSpaceIndex + 1),
+    };
+  }
+
   private requiresResponse(command: string): boolean {
-    const requiresResponseCommands = ['/reminder', '/schedule', '/unschedule'];
+    const requiresResponseCommands = ['/remind', '/schedule', '/unschedule'];
     return requiresResponseCommands.includes(command);
   }
 
   private supportsDirectInput(command: string): boolean {
-    const supportsDirectInputCommands = [
-      '/reminder',
-      '/schedule',
-      '/unschedule',
-    ];
+    const supportsDirectInputCommands = ['/remind', '/schedule', '/unschedule'];
     return supportsDirectInputCommands.includes(command);
   }
 
   private getExpectedResponseType(command: string): string {
     const responseTypes = {
-      '/reminder': 'time_and_message',
+      '/remind': 'time_and_message',
       '/schedule': 'time_and_message',
       '/unschedule': 'schedule_id',
     };
@@ -219,7 +236,7 @@ export class TelegramService {
 
   private getPromptForCommand(command: string): string {
     const prompts = {
-      '/reminder':
+      '/remind':
         'Please enter time in minutes and message (e.g. "30 Call Mom")',
       '/schedule':
         'Please enter time (HH:MM) and message (e.g. "14:30 Daily standup")',
@@ -249,6 +266,12 @@ export class TelegramService {
     return 'LIST OF COMMANDS';
   }
 
+  private async handleCancel() {
+    const command = await this.commandStateService.getCommandState(this.chatId);
+    await this.commandStateService.clearCommandState(this.chatId);
+    return `The command '${command.command}' has been cancelled.`;
+  }
+
   private async handleAI(content) {
     await this.sendChatAction('typing');
     const gptResponse = await this.openaiService.getResponse(
@@ -263,6 +286,98 @@ export class TelegramService {
     return 'Conversation history has been reset.';
   }
 
+  private async handleReminder(content: string): Promise<string> {
+    if (!content) {
+      throw new TelegramWarningException(
+        'Please specify delay in minutes and message. Format: /remind 30 Your message',
+      );
+    }
+
+    const [delayStr, ...messageWords] = content.split(' ');
+    const message = messageWords.join(' ');
+    const delay = parseInt(delayStr) * 60 * 1000; // Convert minutes to milliseconds
+
+    if (!message) {
+      throw new TelegramWarningException(
+        'Please provide a message for the reminder',
+      );
+    }
+    if (isNaN(delay) || delay <= 0) {
+      throw new TelegramWarningException(
+        'Please specify delay in minutes. Format: /remind 30 Your message',
+      );
+    }
+
+    try {
+      const job = await this.messagesQueue.add(
+        'delayed-message',
+        {
+          chatId: this.chatId,
+          message,
+          type: 'delayed',
+          createdAt: new Date(),
+        },
+        {
+          delay,
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 1000,
+          },
+        },
+      );
+
+      return `✅ Reminder set for ${delayStr} minutes from now\nTo remove click: /_rem_${job.id}`;
+    } catch (error) {
+      this.logger.error('Reminder error:', error);
+      throw new TelegramWarningException(
+        'Failed to set reminder. Please try again.',
+      );
+    }
+  }
+
+  private async handleRemoveReminder(jobId: string): Promise<string> {
+    if (!jobId) {
+      throw new TelegramWarningException(
+        'Please provide reminder ID. Format: /_rem_123456',
+      );
+    }
+
+    try {
+      const job = await this.messagesQueue.getJob(jobId);
+
+      if (!job) {
+        throw new TelegramWarningException(
+          'Reminder not found. It might have been already completed or removed.',
+        );
+      }
+
+      if (job.data.chatId !== this.chatId) {
+        throw new TelegramWarningException(
+          "This reminder is from other user's chat. Please try to enter correct ID.",
+        );
+      }
+
+      const state = await job.getState();
+      if (state === 'completed') {
+        throw new TelegramWarningException(
+          'This reminder has already been sent and cannot be removed.',
+        );
+      }
+
+      await job.remove();
+      return '✅ Successfully removed reminder';
+    } catch (error) {
+      if (error instanceof TelegramWarningException) {
+        throw error;
+      }
+      this.logger.error('Remove reminder error:', error);
+      throw new TelegramWarningException(
+        'Failed to remove reminder. Please try again.',
+      );
+    }
+  }
+
   private async handleSchedule(content: string): Promise<string> {
     if (!content) {
       throw new TelegramWarningException(
@@ -270,8 +385,7 @@ export class TelegramService {
       );
     }
 
-    const [time, ...messageWords] = content.split(' ');
-    const message = messageWords.join(' ');
+    const { first: time, rest: message } = this.getFirstAndRest(content);
 
     if (!message) {
       throw new TelegramWarningException(
@@ -279,28 +393,35 @@ export class TelegramService {
       );
     }
 
+    const [hours, minutes] = time.split(':').map(Number);
+
+    if (
+      isNaN(hours) ||
+      isNaN(minutes) ||
+      hours < 0 ||
+      hours > 23 ||
+      minutes < 0 ||
+      minutes > 59
+    ) {
+      throw new TelegramWarningException(
+        'Invalid time format. Please use HH:MM format (e.g., 14:30)',
+      );
+    }
+
+    const cronPattern = `${minutes} ${hours} * * *`;
+
+    const formatedMinutes = minutes <= 9 ? `0${minutes}` : `${minutes}`;
+    const formatedHours = hours <= 9 ? `0${hours}` : `${hours}`;
+
+    const jobId = `${this.chatId}_${formatedHours}${formatedMinutes}`;
+
     try {
-      const [hours, minutes] = time.split(':').map(Number);
+      const repeatableJobs = await this.remindersQueue.getRepeatableJobs();
+      const existingJob = repeatableJobs.find((job) => job.id === jobId);
 
-      if (
-        isNaN(hours) ||
-        isNaN(minutes) ||
-        hours < 0 ||
-        hours > 23 ||
-        minutes < 0 ||
-        minutes > 59
-      ) {
-        throw new TelegramWarningException(
-          'Invalid time format. Please use HH:MM format (e.g., 14:30)',
-        );
+      if (existingJob) {
+        await this.remindersQueue.removeRepeatableByKey(existingJob.key);
       }
-
-      const cronPattern = `${minutes} ${hours} * * *`;
-
-      const formatedMinutes = minutes <= 9 ? `0${minutes}` : `${minutes}`;
-      const formatedHours = hours <= 9 ? `0${hours}` : `${hours}`;
-
-      const jobId = `${this.chatId}-${formatedHours}-${formatedMinutes}`;
 
       await this.remindersQueue.add(
         'daily-reminder',
@@ -320,7 +441,8 @@ export class TelegramService {
         },
       );
 
-      return `✅ Successfully scheduled message:\n"${message}"\nfor ${time} daily\nJob ID: ${jobId}`;
+      const action = existingJob ? 'updated' : 'scheduled';
+      return `✅ Successfully ${action} message:\n"${message}"\nfor ${time} daily\nTo delete click: /_del_${jobId}`;
     } catch (error) {
       this.logger.error('Schedule error:', error);
       throw new TelegramWarningException(
@@ -329,68 +451,29 @@ export class TelegramService {
     }
   }
 
-  private async handleReminder(content: string): Promise<string> {
-    if (!content) {
-      throw new TelegramWarningException(
-        'Please specify delay in minutes and message. Format: /reminder 30 Your message',
-      );
-    }
-
-    const [delayStr, ...messageWords] = content.split(' ');
-    const message = messageWords.join(' ');
-    const delay = parseInt(delayStr) * 60 * 1000; // Convert minutes to milliseconds
-
-    if (!message) {
-      throw new TelegramWarningException(
-        'Please provide a message for the reminder',
-      );
-    }
-    if (isNaN(delay) || delay <= 0) {
-      throw new TelegramWarningException(
-        'Please specify delay in minutes. Format: /reminder 30 Your message',
-      );
-    }
-
-    try {
-      await this.messagesQueue.add(
-        'delayed-message',
-        {
-          chatId: this.chatId,
-          message,
-          type: 'delayed',
-          createdAt: new Date(),
-        },
-        {
-          delay,
-          attempts: 3,
-          backoff: {
-            type: 'exponential',
-            delay: 1000,
-          },
-        },
-      );
-
-      return `✅ Reminder set for ${delayStr} minutes from now`;
-    } catch (error) {
-      this.logger.error('Reminder error:', error);
-      throw new TelegramWarningException(
-        'Failed to set reminder. Please try again.',
-      );
-    }
-  }
-
   private async handleUnschedule(jobId: string): Promise<string> {
+    if (!jobId.startsWith(this.chatId.toString())) {
+      throw new TelegramWarningException(
+        "This ID is from other user's chat. Please try to enter correct ID.",
+      );
+    }
+
     try {
       const repeatableJobs = await this.remindersQueue.getRepeatableJobs();
       const job = repeatableJobs.find((j) => j.id === jobId);
 
       if (!job) {
-        throw new TelegramWarningException('Scheduled message not found');
+        throw new TelegramWarningException(
+          'Scheduled message not found. Please try to enter correct ID.',
+        );
       }
 
       await this.remindersQueue.removeRepeatableByKey(job.key);
       return '✅ Successfully removed scheduled message';
     } catch (error) {
+      if (error instanceof TelegramWarningException) {
+        throw error;
+      }
       this.logger.error('Unschedule error:', error);
       throw new TelegramWarningException(
         'Failed to remove scheduled message. Please try again.',
@@ -410,17 +493,45 @@ export class TelegramService {
         throw new TelegramWarningException('You have no scheduled messages');
       }
 
-      const jobsList = userJobs
-        .map((job) => {
+      const jobsWithData = await Promise.all(
+        userJobs.map(async (job) => {
+          const delayedJobs = await this.remindersQueue.getDelayed();
+          const relatedJob = delayedJobs.find(
+            (delayed) =>
+              delayed.opts.repeat.key ===
+              `daily-reminder:${job.id}:::${job.cron}`,
+          );
+
+          let message = '';
+          if (relatedJob) {
+            const jobData = relatedJob.data;
+            message = jobData.message;
+          }
+
           let [minutes, hours] = job.cron.split(' ');
           minutes = minutes.length < 2 ? `0${minutes}` : `${minutes}`;
           hours = hours.length < 2 ? `0${hours}` : `${hours}`;
-          return `🕒 <b>${hours}:${minutes}</b> - ID: <code>${job.id}</code> 🕒`;
-        })
+
+          return {
+            time: `${hours}:${minutes}`,
+            id: job.id,
+            message,
+          };
+        }),
+      );
+
+      const jobsList = jobsWithData
+        .map(
+          (job) =>
+            `🕒 <b>${job.time}:</b>\n<i>"${job.message}"</i>\n🗑/_del_${job.id}`,
+        )
         .join('\n');
 
-      return `Your scheduled messages:\n${jobsList}\nYou can use message ID to remove it from schedule`;
+      return `Your scheduled messages:\n${jobsList}\n<u>Use commands under the messages to remove it from schedule</u>`;
     } catch (error) {
+      if (error instanceof TelegramWarningException) {
+        throw error;
+      }
       this.logger.error('List scheduled error:', error);
       throw new TelegramWarningException(
         'Failed to list scheduled messages. Please try again.',

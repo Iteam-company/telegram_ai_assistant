@@ -1,7 +1,7 @@
 import { BullModule } from '@nestjs/bull';
 import { MessagesProcessor } from './processors/telegram.message.processor';
 import { NotificationsProcessor } from './processors/telegram.notifications.processor';
-import { RemindersProcessor } from './processors/telegram.reminders,processor';
+import { RemindersProcessor } from './processors/telegram.reminders.processor';
 import { TelegramController } from './telegram.controller';
 import { TelegramService } from './telegram.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -10,6 +10,7 @@ import { OpenaiModule } from 'src/openai/openai.module';
 import { Module } from '@nestjs/common';
 import { ChatModule } from 'src/chat/chat.module';
 import { RedisModule } from 'src/redis/redis.module';
+import { CleanupService } from './bull-cleanup.service';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { RedisModule } from 'src/redis/redis.module';
     MessagesProcessor,
     RemindersProcessor,
     NotificationsProcessor,
+    CleanupService,
   ],
   controllers: [TelegramController],
 })
