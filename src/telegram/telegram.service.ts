@@ -29,7 +29,7 @@ export class TelegramService {
     (string?) => Promise<string> | string
   >();
   private chatId: number;
-  private inactiveMinutesThreshold: number = 60 * 24;
+  private inactiveMinutesThreshold: number = 5;
 
   constructor(
     private httpService: HttpService,
@@ -46,6 +46,7 @@ export class TelegramService {
 
   private registerCommands() {
     this.commands.set('', this.handleAI);
+    this.commands.set('/NOTACOMMAND', this.handleNotACommand);
     this.commands.set('/reset_history', this.handleHistoryReset);
     this.commands.set('/start', this.handleStart);
     this.commands.set('/help', this.handleHelp);
@@ -216,20 +217,31 @@ export class TelegramService {
   }
 
   private requiresResponse(command: string): boolean {
-    const requiresResponseCommands = ['/remind', '/schedule', '/unschedule'];
+    const requiresResponseCommands = [
+      '/remind',
+      '/nevermind',
+      '/schedule',
+      '/unschedule',
+    ];
     return requiresResponseCommands.includes(command);
   }
 
   private supportsDirectInput(command: string): boolean {
-    const supportsDirectInputCommands = ['/remind', '/schedule', '/unschedule'];
+    const supportsDirectInputCommands = [
+      '/remind',
+      '/nevermind',
+      '/schedule',
+      '/unschedule',
+    ];
     return supportsDirectInputCommands.includes(command);
   }
 
   private getExpectedResponseType(command: string): string {
     const responseTypes = {
       '/remind': 'time_and_message',
+      '/nevermind': 'id',
       '/schedule': 'time_and_message',
-      '/unschedule': 'schedule_id',
+      '/unschedule': 'id',
     };
     return responseTypes[command] || 'text';
   }
@@ -237,11 +249,13 @@ export class TelegramService {
   private getPromptForCommand(command: string): string {
     const prompts = {
       '/remind':
-        'Please enter time in minutes and message (e.g. "30 Call Mom")',
+        'Please enter time in minutes and message (e.g. "30 Call Mom"). Or click /cancel to abort the command.',
+      '/nevermind':
+        'Please enter the reminder-ID (e.g. "76"). Or click /cancel to abort the command.',
       '/schedule':
-        'Please enter time (HH:MM) and message (e.g. "14:30 Daily standup")',
+        'Please enter time (HH:MM) and message (e.g. "14:30 Daily standup"). Or click /cancel to abort the command.',
       '/unschedule':
-        'Please enter the copied schedule-ID from schedule list (e.g. "123456789-12-35")',
+        'Please enter the schedule-ID from schedule list (e.g. "123456789-12-35"). Or click /cancel to abort the command.',
     };
     return prompts[command] || 'Please enter your response:';
   }
@@ -259,13 +273,41 @@ export class TelegramService {
   }
 
   private handleStart() {
-    return "Welcome👋! I am a bot🤖 powered by ChatGPT. Ask me anything!\nOr type '/help' to get list of commands.";
+    return "Welcome👋! I am a bot🤖 powered by ChatGPT. Ask me anything!\nType '/help' to get a list of commands or click 'menu' for a shortcuts.";
   }
 
   private handleHelp() {
-    return 'LIST OF COMMANDS';
+    return `
+<u>Bot features:</u> conversation with AI, setting/unsetting/listing of everyday scheduled reminders, setting/unsetting one-time reminders.
+
+For conversation with AI just type your messages in chat, just like chating with real person.
+This bot supports only text inputs. Commands support oneline input:
+<code>USER> "/remind 5 Tea is ready!"
+BOT> *Bot conformation*</code>
+and/or two-step input:
+<code>USER> "/remind"
+BOT> *TIP FOR COMMAND USING*
+USER> "5 Tea is ready!"
+BOT> *Bot conformation*</code>
+
+<u>Command list:</u>
+/help - Show all available commands 🤖
+
+/schedule [HH:MM] [message] - Set a daily reminder (e.g., <code>"/schedule 09:30 Morning meeting"</code>) 🕒
+/list_scheduled - View all your scheduled daily messages 📋
+/_del_[ID] - Remove a scheduled message by clicking the command under it 🗑
+
+/remind [minutes] [message] - Set a one-time reminder (e.g., <code>"/remind 30 Take medicine"</code>) ⏰
+/_rem_[ID] - Remove a reminder by clicking the command under it ❌
+
+/reset_history - Clear chat history with AI 🧹
+/cancel - Cancel current command 🚫
+`;
   }
 
+  private handleNotACommand() {
+    return 'This is not a command, but it is a tip🤗\nFor conversation with AI just';
+  }
   private async handleCancel() {
     const command = await this.commandStateService.getCommandState(this.chatId);
     await this.commandStateService.clearCommandState(this.chatId);
@@ -539,7 +581,7 @@ export class TelegramService {
     }
   }
 
-  @Cron(CronExpression.EVERY_HOUR)
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async checkInactiveUsers() {
     const inactiveChats = await this.chatService.getInactiveChats(
       this.inactiveMinutesThreshold,
