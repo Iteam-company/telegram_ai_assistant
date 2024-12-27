@@ -25,35 +25,58 @@ export class OpenaiService {
     this.MODEL = this.configService.get<string>('OPENAI_MODEL');
   }
 
-  async getResponse(chatId: number, message: string): Promise<string> {
+  async getResponseWithChatHistory(
+    message: string,
+    chatId: number,
+  ): Promise<string> {
     try {
-      // const dialogPart = [];
-      // this.chatHistory = await this.chatService.getConversationHistory(chatId);
+      const dialogPart = [];
+      this.chatHistory = await this.chatService.getConversationHistory(chatId);
 
-      // this.chatHistory.push({ role: 'user', content: message });
-      // dialogPart.push({ role: 'user', content: message });
+      this.chatHistory.push({ role: 'user', content: message });
+      dialogPart.push({ role: 'user', content: message });
 
-      // const completion = await this.openai.chat.completions.create({
-      //   messages: this.chatHistory,
-      //   model: this.MODEL,
-      // });
+      const completion = await this.openai.chat.completions.create({
+        messages: this.chatHistory,
+        model: this.MODEL,
+      });
 
-      // const response =
-      //   completion.choices[0].message.content ||
-      //   'Sorry, I could not process that.';
+      const response =
+        completion.choices[0].message.content ||
+        'Sorry, I could not process that.';
 
-      // this.chatHistory.push({ role: 'assistant', content: response });
-      // dialogPart.push({ role: 'assistant', content: response });
+      this.chatHistory.push({ role: 'assistant', content: response });
+      dialogPart.push({ role: 'assistant', content: response });
 
-      // this.chatService.pushMessagesWithMaxHistory(
-      //   chatId,
-      //   dialogPart,
-      //   this.MAX_HISTORY,
-      // );
+      this.chatService.pushMessagesWithMaxHistory(
+        chatId,
+        dialogPart,
+        this.MAX_HISTORY,
+      );
 
-      // return response;
+      return response;
+    } catch (error) {
+      this.logger.error('OpenAI API Error:', error);
+      const status = error.response?.status || error.status || 500;
+      throw new OpenAIException(error.message, error, status);
+    }
+  }
 
-      return `Ok: ${message}`;
+  async getResponse(message: string): Promise<string> {
+    try {
+      const dialogPart = [];
+      dialogPart.push({ role: 'user', content: message });
+
+      const completion = await this.openai.chat.completions.create({
+        messages: dialogPart,
+        model: this.MODEL,
+      });
+
+      const response =
+        completion.choices[0].message.content ||
+        'Sorry, I could not process that.';
+
+      return response;
     } catch (error) {
       this.logger.error('OpenAI API Error:', error);
       const status = error.response?.status || error.status || 500;

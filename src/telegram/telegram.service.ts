@@ -20,6 +20,7 @@ import { TelegramMessage } from './interfaces/telegram-message.interface';
 import { ChatService } from 'src/chat/chat.service';
 import { CommandStateService } from 'src/redis/command-state.service';
 import { CommandState } from './interfaces/command-state.interface';
+import { TelegramMyChatMember } from './interfaces/telegram-my-chat-member.interface';
 
 @Injectable()
 export class TelegramService {
@@ -105,7 +106,12 @@ export class TelegramService {
   async setWebhook(url: string): Promise<boolean> {
     const response = this.httpService.post('setWebhook', {
       url,
-      allowed_updates: ['message', 'callback_query'],
+      allowed_updates: [
+        'message',
+        'callback_query',
+        'my_chat_member',
+        'chat_member',
+      ],
       max_connections: 100,
     });
     const { data } = await firstValueFrom(response);
@@ -123,7 +129,9 @@ export class TelegramService {
 
   async handleUpdate(update: TelegramUpdate) {
     this.chatId =
-      update.message.chat.id || update.callback_query.message.chat.id;
+      update.message?.chat.id ||
+      update.callback_query?.message.chat.id ||
+      update.my_chat_member?.chat.id;
 
     await this.chatService.updateLastActivity(this.chatId);
 
@@ -131,6 +139,8 @@ export class TelegramService {
       await this.handleMessage(update.message);
     } else if (update.callback_query) {
       await this.handleCallbackQuery(update.callback_query);
+    } else if (update.my_chat_member) {
+      await this.handleBotBlocking(update.my_chat_member);
     }
   }
 
@@ -143,6 +153,12 @@ export class TelegramService {
 
   private async handleCallbackQuery(callbackQuery: any) {
     await this.sendMessage(`Callback received: ${callbackQuery.data}`);
+  }
+
+  private async handleBotBlocking(my_chat_member: TelegramMyChatMember) {
+    if (my_chat_member.new_chat_member.status === 'kicked') {
+      this.chatService.setInactive(this.chatId);
+    }
   }
 
   private async handleTextMessages(text: string): Promise<boolean> {
@@ -308,6 +324,7 @@ BOT> *Bot conformation*</code>
   private handleNotACommand() {
     return 'This is not a command, but it is a tip🤗\nFor conversation with AI just';
   }
+
   private async handleCancel() {
     const command = await this.commandStateService.getCommandState(this.chatId);
     await this.commandStateService.clearCommandState(this.chatId);
@@ -316,9 +333,9 @@ BOT> *Bot conformation*</code>
 
   private async handleAI(content) {
     await this.sendChatAction('typing');
-    const gptResponse = await this.openaiService.getResponse(
-      this.chatId,
+    const gptResponse = await this.openaiService.getResponseWithChatHistory(
       content,
+      this.chatId,
     );
     return gptResponse;
   }
@@ -581,7 +598,7 @@ BOT> *Bot conformation*</code>
     }
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async checkInactiveUsers() {
     const inactiveChats = await this.chatService.getInactiveChats(
       this.inactiveMinutesThreshold,
