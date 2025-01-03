@@ -37,8 +37,10 @@ export class TelegramService {
     private httpService: HttpService,
     private openaiService: OpenaiService,
     private chatService: ChatService,
-    @InjectQueue('messages') private messagesQueue: Queue<MessageJobData>,
-    @InjectQueue('reminders') private remindersQueue: Queue<ReminderJobData>,
+    @InjectQueue('messages')
+    private messagesQueue: Queue<MessageJobData>,
+    @InjectQueue('reminders')
+    private remindersQueue: Queue<ReminderJobData>,
     @InjectQueue('notifications')
     private notificationsQueue: Queue<NotificationJobData>,
     private commandStateService: CommandStateService,
@@ -60,6 +62,9 @@ export class TelegramService {
     this.commands.set('/unschedule', this.handleUnschedule);
     this.commands.set('/_del_', this.handleUnschedule);
     this.commands.set('/list_scheduled', this.handleListScheduled);
+    this.commands.set('/once', this.handleOnce);
+    this.commands.set('/daily', this.handleDaily);
+    this.commands.set('/delayed', this.handleDelayed);
   }
 
   async sendMessage(text: string, specificChatId?: number): Promise<boolean> {
@@ -230,6 +235,9 @@ export class TelegramService {
       '/nevermind',
       '/schedule',
       '/unschedule',
+      '/once',
+      '/daily',
+      '/delayed',
     ];
     return requiresResponseCommands.includes(command);
   }
@@ -240,6 +248,9 @@ export class TelegramService {
       '/nevermind',
       '/schedule',
       '/unschedule',
+      '/once',
+      '/daily',
+      '/delayed',
     ];
     return supportsDirectInputCommands.includes(command);
   }
@@ -250,6 +261,9 @@ export class TelegramService {
       '/nevermind': 'id',
       '/schedule': 'time_and_message',
       '/unschedule': 'id',
+      '/once': 'date_time_and_message',
+      '/daily': 'time_and_message',
+      '/delayed': 'minutes_and_message',
     };
     return responseTypes[command] || 'text';
   }
@@ -278,6 +292,108 @@ export class TelegramService {
     await this.commandStateService.clearCommandState(this.chatId);
 
     return await this.sendMessage(responseMessage);
+  }
+
+  private async addDailyReminder(
+    time: string,
+    message: string,
+  ): Promise<{ jobId: any; time: string }> {
+    const [hours, minutes] = time.split(':').map(Number);
+    const cronPattern = `${minutes} ${hours} * * *`;
+    const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    const jobId = `${this.chatId}_daily_${formattedTime.replace(':', '_')}`;
+
+    const repeatableJobs = await this.remindersQueue.getRepeatableJobs();
+    const existingJob = repeatableJobs.find((job) => job.id === jobId);
+    if (existingJob) {
+      await this.remindersQueue.removeRepeatableByKey(existingJob.key);
+    }
+
+    await this.remindersQueue.add(
+      'daily-reminder',
+      {
+        chatId: this.chatId,
+        message,
+        type: 'daily',
+        cronPattern,
+        time: formattedTime,
+        createdAt: new Date(),
+      },
+      {
+        repeat: { cron: cronPattern },
+        jobId,
+        removeOnComplete: false,
+        removeOnFail: false,
+      },
+    );
+
+    return { jobId, time: formattedTime };
+  }
+
+  private async addOnceReminder(
+    dateTime: Date,
+    message: string,
+  ): Promise<{ jobId: any; executeAt: Date }> {
+    const delay = dateTime.getTime() - Date.now();
+
+    const job = await this.messagesQueue.add(
+      'delayed',
+      {
+        chatId: this.chatId,
+        message,
+        type: 'once',
+        executeAt: dateTime,
+        createdAt: new Date(),
+      },
+      {
+        delay,
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 1000,
+        },
+      },
+    );
+
+    return { jobId: job.id, executeAt: dateTime };
+  }
+
+  private async addDelayedReminder(
+    minutes: number,
+    message: string,
+  ): Promise<{ jobId: any; executeAt: Date }> {
+    const delay = minutes * 60 * 1000;
+    const executeAt = new Date(Date.now() + delay);
+
+    const job = await this.messagesQueue.add(
+      'delayed',
+      {
+        chatId: this.chatId,
+        message,
+        type: 'delayed',
+        delay,
+        createdAt: new Date(),
+      },
+      {
+        delay,
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 1000,
+        },
+      },
+    );
+
+    return { jobId: job.id, executeAt };
+  }
+
+  private validateDateTime(date: Date): void {
+    const validate = StringParser.validateDateTime(date);
+    if (!validate) {
+      throw new TelegramWarningException(
+        'Please specify future date and time.',
+      );
+    }
   }
 
   private handleStart() {
@@ -314,7 +430,8 @@ BOT> *Bot conformation*</code>
   }
 
   private handleNotACommand() {
-    return 'This is not a command, but it is a tip🤗\nFor conversation with AI just';
+    // TODO
+    return 'This is not a command, but it is a tip🤗\nFor conversation with AI just...';
   }
 
   private async handleCancel() {
@@ -335,6 +452,82 @@ BOT> *Bot conformation*</code>
   private async handleHistoryReset() {
     await this.chatService.clearConversationHistory(this.chatId);
     return 'Conversation history has been reset.';
+  }
+
+  private async handleOnce(content: string): Promise<string> {
+    if (!content) {
+      throw new TelegramWarningException(
+        'Please provide date, time and message. Format: /once DD.MM.YYYY HH:MM Your message or HH:MM Your message',
+      );
+    }
+
+    const { first: dateTimeStr, rest: message } =
+      StringParser.getRegexAndRest(content);
+    if (!message) {
+      throw new TelegramWarningException('Please provide a message');
+    }
+
+    const dateTime = StringParser.parseDateTime(dateTimeStr);
+    this.validateDateTime(dateTime);
+
+    const { jobId, executeAt } = await this.addOnceReminder(dateTime, message);
+
+    return `✅ One-time reminder set:\n"${message}"\nfor ${executeAt.toLocaleString()}\nTo remove click: /_rem_${jobId}`;
+  }
+
+  private async handleDaily(content: string): Promise<string> {
+    if (!content) {
+      throw new TelegramWarningException(
+        'Please provide time and message. Format: /daily HH:MM Your message',
+      );
+    }
+
+    const { first: time, rest: message } =
+      StringParser.getFirstAndRest(content);
+    if (!message) {
+      throw new TelegramWarningException('Please provide a message');
+    }
+
+    if (!time.match(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)) {
+      throw new TelegramWarningException(
+        'Invalid time format. Please use HH:MM format (e.g., 14:30)',
+      );
+    }
+
+    const { jobId, time: formattedTime } = await this.addDailyReminder(
+      time,
+      message,
+    );
+
+    return `✅ Daily reminder set:\n"${message}"\nfor ${formattedTime} every day\nTo remove click: /_del_${jobId}`;
+  }
+
+  private async handleDelayed(content: string): Promise<string> {
+    if (!content) {
+      throw new TelegramWarningException(
+        'Please specify delay in minutes and message. Format: /delayed 30 Your message',
+      );
+    }
+
+    const { first: minutesStr, rest: message } =
+      StringParser.getFirstAndRest(content);
+    if (!message) {
+      throw new TelegramWarningException('Please provide a message');
+    }
+
+    const minutes = parseInt(minutesStr);
+    if (isNaN(minutes) || minutes <= 0) {
+      throw new TelegramWarningException(
+        'Please specify valid delay in minutes',
+      );
+    }
+
+    const { jobId, executeAt } = await this.addDelayedReminder(
+      minutes,
+      message,
+    );
+
+    return `✅ Reminder set:\n"${message}"\nfor ${executeAt.toLocaleString()}\nTo remove click: /_rem_${jobId}`;
   }
 
   private async delayedMessage(
@@ -609,17 +802,17 @@ BOT> *Bot conformation*</code>
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
-  async checkInactiveUsers() {
-    const inactiveChats = await this.chatService.getInactiveChats(
-      this.inactiveMinutesThreshold,
-    );
-    for (const chat of inactiveChats) {
-      await this.notificationsQueue.add('inactivity', {
-        chatId: chat.chatId,
-        type: 'inactivity',
-        createdAt: new Date(),
-      });
-    }
-  }
+  // @Cron(CronExpression.EVERY_MINUTE)
+  // async checkInactiveUsers() {
+  //   const inactiveChats = await this.chatService.getInactiveChats(
+  //     this.inactiveMinutesThreshold,
+  //   );
+  //   for (const chat of inactiveChats) {
+  //     await this.notificationsQueue.add('inactivity', {
+  //       chatId: chat.chatId,
+  //       type: 'inactivity',
+  //       createdAt: new Date(),
+  //     });
+  //   }
+  // }
 }

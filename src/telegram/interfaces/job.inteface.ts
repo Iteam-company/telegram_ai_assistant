@@ -1,21 +1,29 @@
 export interface BaseJobData {
   chatId: number;
+  message?: string;
   createdAt: Date;
 }
 
-export interface MessageJobData extends BaseJobData {
-  message: string;
-  type: 'delayed' | 'ai';
+export type MessageJobData = DelayedJobData | OneTimeJobData;
+
+export type ReminderJobData = DailyJobData;
+
+export interface OneTimeJobData extends BaseJobData {
+  type: 'once' | 'ai' | 'custom';
+  executeAt: Date;
 }
 
-export interface ReminderJobData extends BaseJobData {
-  message: string;
-  type: 'daily' | 'ai';
-  cronPattern?: string;
-  time?: string;
+export interface DailyJobData extends BaseJobData {
+  type: 'daily' | 'ai' | 'custom';
+  cronPattern: string;
+  time: string;
+}
+
+export interface DelayedJobData extends BaseJobData {
+  type: 'delayed' | 'ai' | 'custom';
+  delay?: number;
 }
 
 export interface NotificationJobData extends BaseJobData {
-  type: 'inactivity' | 'custom';
-  message?: string;
+  type: 'inactivity' | 'ai' | 'custom';
 }
