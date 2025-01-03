@@ -18,7 +18,6 @@ export class NotificationsProcessor {
         "👋 Hey! We haven't heard from you for a while. How are you doing?",
         chatId,
       );
-      // this.logger.log(`Sent inactivity alert to chat ${chatId}`);
     } catch (error) {
       this.logger.error(
         `Failed to send inactivity alert to chat ${chatId}: ${error.message}`,

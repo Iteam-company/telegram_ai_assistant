@@ -14,30 +14,28 @@ export class RemindersProcessor {
     private openaiService: OpenaiService,
   ) {}
 
-  @Process('ai-reminder')
+  @Process('daily-reminder')
   async handleDailyReminder(job: Job<ReminderJobData>) {
     const { chatId, message } = job.data;
     try {
-      const openaiResponce = await this.openaiService.getResponse(message);
-      await this.telegramService.sendMessage(openaiResponce, chatId);
-      // this.logger.log(`Sent daily reminder to chat ${chatId}`);
+      await this.telegramService.sendMessage(message, chatId);
     } catch (error) {
       this.logger.error(
-        `Failed to send daily reminder to chat ${chatId}: ${error.message}`,
+        `Failed to send custom reminder to chat ${chatId}: ${error.message}`,
       );
       throw error;
     }
   }
 
-  @Process('daily-reminder')
-  async handleCustomReminder(job: Job<ReminderJobData>) {
+  @Process('ai-reminder')
+  async handleAIReminder(job: Job<ReminderJobData>) {
     const { chatId, message } = job.data;
     try {
-      await this.telegramService.sendMessage(message, chatId);
-      // this.logger.log(`Sent custom reminder to chat ${chatId}`);
+      const openaiResponce = await this.openaiService.getAIResponse(message);
+      await this.telegramService.sendMessage(openaiResponce, chatId);
     } catch (error) {
       this.logger.error(
-        `Failed to send custom reminder to chat ${chatId}: ${error.message}`,
+        `Failed to send daily reminder to chat ${chatId}: ${error.message}`,
       );
       throw error;
     }

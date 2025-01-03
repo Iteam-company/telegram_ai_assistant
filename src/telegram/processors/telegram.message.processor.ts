@@ -14,12 +14,11 @@ export class MessagesProcessor {
     private openaiService: OpenaiService,
   ) {}
 
-  @Process('delayed-message')
-  async handleDirectMessage(job: Job<MessageJobData>) {
+  @Process('delayed')
+  async handleDelayedMessage(job: Job<MessageJobData>) {
     const { chatId, message } = job.data;
     try {
       await this.telegramService.sendMessage(message, chatId);
-      // this.logger.log(`Sent direct message to chat ${chatId}`);
     } catch (error) {
       this.logger.error(
         `Failed to send direct message to chat ${chatId}: ${error.message}`,
@@ -28,13 +27,12 @@ export class MessagesProcessor {
     }
   }
 
-  @Process('ai-message')
-  async handleDelayedMessage(job: Job<MessageJobData>) {
+  @Process('delayed-ai')
+  async handleDelayedAIMessage(job: Job<MessageJobData>) {
     const { chatId, message } = job.data;
     try {
-      const openaiResponce = await this.openaiService.getResponse(message);
+      const openaiResponce = await this.openaiService.getAIResponse(message);
       await this.telegramService.sendMessage(openaiResponce, chatId);
-      // this.logger.log(`Sent delayed message to chat ${chatId}`);
     } catch (error) {
       this.logger.error(
         `Failed to send delayed message to chat ${chatId}: ${error.message}`,

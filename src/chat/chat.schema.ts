@@ -15,7 +15,15 @@ export class Chat extends Document {
   @Prop({ default: Date.now })
   lastActivity: Date;
 
-  @Prop({ type: [{ role: String, content: String, timestamp: Date }] })
+  @Prop({
+    type: [
+      {
+        role: { type: String, enum: ['user', 'assistant'] },
+        content: String,
+        timestamp: { type: Date, required: false },
+      },
+    ],
+  })
   messages: Message[];
 
   @Prop({ default: false })

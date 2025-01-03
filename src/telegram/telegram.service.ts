@@ -21,6 +21,7 @@ import { ChatService } from 'src/chat/chat.service';
 import { CommandStateService } from 'src/redis/command-state.service';
 import { CommandState } from './interfaces/command-state.interface';
 import { TelegramMyChatMember } from './interfaces/telegram-my-chat-member.interface';
+import { StringParser } from 'src/common/utils/string-parser';
 
 @Injectable()
 export class TelegramService {
@@ -223,15 +224,6 @@ export class TelegramService {
     };
   }
 
-  private getFirstAndRest(input: string): { first: string; rest: string } {
-    const trimmedInput = input.trim();
-    const firstSpaceIndex = trimmedInput.indexOf(' ');
-    return {
-      first: trimmedInput.slice(0, firstSpaceIndex),
-      rest: trimmedInput.slice(firstSpaceIndex + 1),
-    };
-  }
-
   private requiresResponse(command: string): boolean {
     const requiresResponseCommands = [
       '/remind',
@@ -333,7 +325,7 @@ BOT> *Bot conformation*</code>
 
   private async handleAI(content) {
     await this.sendChatAction('typing');
-    const gptResponse = await this.openaiService.getResponseWithChatHistory(
+    const gptResponse = await this.openaiService.getAIResponseWithChatHistory(
       content,
       this.chatId,
     );
@@ -345,23 +337,31 @@ BOT> *Bot conformation*</code>
     return 'Conversation history has been reset.';
   }
 
-  private async handleReminder(content: string): Promise<string> {
+  private async delayedMessage(
+    content: string,
+    type: 'delayed' | 'ai',
+  ): Promise<string> {
     if (!content) {
       throw new TelegramWarningException(
         'Please specify delay in minutes and message. Format: /remind 30 Your message',
       );
     }
 
-    const [delayStr, ...messageWords] = content.split(' ');
-    const message = messageWords.join(' ');
-    const delay = parseInt(delayStr) * 60 * 1000; // Convert minutes to milliseconds
+    const { first: time, rest: message } =
+      StringParser.getFirstAndRest(content);
 
     if (!message) {
       throw new TelegramWarningException(
         'Please provide a message for the reminder',
       );
     }
-    if (isNaN(delay) || delay <= 0) {
+
+    // if (time.match(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)) {
+    // }
+
+    const delay = parseInt(time) * 60 * 1000; // Convert minutes to milliseconds
+
+    if (isNaN(delay) || (delay <= 0 && delay > 1440)) {
       throw new TelegramWarningException(
         'Please specify delay in minutes. Format: /remind 30 Your message',
       );
@@ -369,11 +369,11 @@ BOT> *Bot conformation*</code>
 
     try {
       const job = await this.messagesQueue.add(
-        'delayed-message',
+        type === 'delayed' ? 'delayed-message' : 'ai-message',
         {
           chatId: this.chatId,
           message,
-          type: 'delayed',
+          type,
           createdAt: new Date(),
         },
         {
@@ -386,13 +386,21 @@ BOT> *Bot conformation*</code>
         },
       );
 
-      return `✅ Reminder set for ${delayStr} minutes from now\nTo remove click: /_rem_${job.id}`;
+      return `✅ Reminder set for ${time} minutes from now\nTo remove click: /_rem_${job.id}`;
     } catch (error) {
       this.logger.error('Reminder error:', error);
       throw new TelegramWarningException(
         'Failed to set reminder. Please try again.',
       );
     }
+  }
+
+  private async handleReminder(content: string): Promise<string> {
+    return this.delayedMessage(content, 'delayed');
+  }
+
+  private async handleReminderAI(content: string): Promise<string> {
+    return this.delayedMessage(content, 'ai');
   }
 
   private async handleRemoveReminder(jobId: string): Promise<string> {
@@ -437,14 +445,18 @@ BOT> *Bot conformation*</code>
     }
   }
 
-  private async handleSchedule(content: string): Promise<string> {
+  private async scheduleMessage(
+    content: string,
+    type: 'daily' | 'ai',
+  ): Promise<string> {
     if (!content) {
       throw new TelegramWarningException(
         'Please provide both time and message. Format: /schedule HH:MM Your message',
       );
     }
 
-    const { first: time, rest: message } = this.getFirstAndRest(content);
+    const { first: time, rest: message } =
+      StringParser.getFirstAndRest(content);
 
     if (!message) {
       throw new TelegramWarningException(
@@ -452,27 +464,20 @@ BOT> *Bot conformation*</code>
       );
     }
 
-    const [hours, minutes] = time.split(':').map(Number);
-
-    if (
-      isNaN(hours) ||
-      isNaN(minutes) ||
-      hours < 0 ||
-      hours > 23 ||
-      minutes < 0 ||
-      minutes > 59
-    ) {
+    if (!time.match(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)) {
       throw new TelegramWarningException(
         'Invalid time format. Please use HH:MM format (e.g., 14:30)',
       );
     }
 
+    const [hours, minutes] = time.split(':').map(Number);
+
     const cronPattern = `${minutes} ${hours} * * *`;
 
-    const formatedMinutes = minutes <= 9 ? `0${minutes}` : `${minutes}`;
-    const formatedHours = hours <= 9 ? `0${hours}` : `${hours}`;
+    const formattedMinutes = minutes <= 9 ? `0${minutes}` : `${minutes}`;
+    const formattedHours = hours <= 9 ? `0${hours}` : `${hours}`;
 
-    const jobId = `${this.chatId}_${formatedHours}${formatedMinutes}`;
+    const jobId = `${this.chatId}_${type}_${formattedHours}${formattedMinutes}`;
 
     try {
       const repeatableJobs = await this.remindersQueue.getRepeatableJobs();
@@ -483,11 +488,11 @@ BOT> *Bot conformation*</code>
       }
 
       await this.remindersQueue.add(
-        'daily-reminder',
+        type === 'daily' ? 'daily-reminder' : 'ai-reminder',
         {
           chatId: this.chatId,
           message,
-          type: 'daily',
+          type,
           cronPattern,
           time,
           createdAt: new Date(),
@@ -501,23 +506,27 @@ BOT> *Bot conformation*</code>
       );
 
       const action = existingJob ? 'updated' : 'scheduled';
-      return `✅ Successfully ${action} message:\n"${message}"\nfor ${time} daily\nTo delete click: /_del_${jobId}`;
+      return `✅ Successfully ${action} ${type} message:\n"${message}"\nfor ${time} daily\nTo delete click: /_del_${jobId}`;
     } catch (error) {
-      this.logger.error('Schedule error:', error);
+      this.logger.error(`${type} Schedule error:`, error);
       throw new TelegramWarningException(
-        'Failed to schedule message. Please try again.',
+        `Failed to schedule ${type} message. Please try again.`,
       );
     }
   }
 
-  private async handleUnschedule(jobId: string): Promise<string> {
-    if (!jobId.startsWith(this.chatId.toString())) {
-      throw new TelegramWarningException(
-        "This ID is from other user's chat. Please try to enter correct ID.",
-      );
-    }
+  private async handleSchedule(content: string): Promise<string> {
+    return this.scheduleMessage(content, 'daily');
+  }
 
+  private async handleScheduleAI(content: string): Promise<string> {
+    return this.scheduleMessage(content, 'ai');
+  }
+
+  private async handleUnschedule(jobIdPart: string): Promise<string> {
     try {
+      const jobId = `${this.chatId}_${jobIdPart}`;
+
       const repeatableJobs = await this.remindersQueue.getRepeatableJobs();
       const job = repeatableJobs.find((j) => j.id === jobId);
 
@@ -571,9 +580,11 @@ BOT> *Bot conformation*</code>
           minutes = minutes.length < 2 ? `0${minutes}` : `${minutes}`;
           hours = hours.length < 2 ? `0${hours}` : `${hours}`;
 
+          const { rest: jobIdPart } = StringParser.getFirstAndRest(job.id, '_');
+
           return {
             time: `${hours}:${minutes}`,
-            id: job.id,
+            id: jobIdPart,
             message,
           };
         }),

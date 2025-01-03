@@ -77,7 +77,7 @@ export class ChatService {
     if (!timestamps) {
       query.select('-timestamp');
     }
-    const chat = await query;
+    const chat = await query.exec();
 
     return chat?.messages || [];
   }

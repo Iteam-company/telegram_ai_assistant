@@ -25,34 +25,23 @@ export class OpenaiService {
     this.MODEL = this.configService.get<string>('OPENAI_MODEL');
   }
 
-  async getResponseWithChatHistory(
-    message: string,
-    chatId: number,
-  ): Promise<string> {
+  async createResponse(messages: Omit<Message, 'timestamp'>[]) {
+    const completion = await this.openai.chat.completions.create({
+      messages: messages,
+      model: this.MODEL,
+    });
+    return (
+      completion.choices[0].message.content ||
+      'Sorry, I could not process that.'
+    );
+  }
+
+  async getAIResponse(message: string): Promise<string> {
     try {
       const dialogPart = [];
-      this.chatHistory = await this.chatService.getConversationHistory(chatId);
-
-      this.chatHistory.push({ role: 'user', content: message });
       dialogPart.push({ role: 'user', content: message });
 
-      const completion = await this.openai.chat.completions.create({
-        messages: this.chatHistory,
-        model: this.MODEL,
-      });
-
-      const response =
-        completion.choices[0].message.content ||
-        'Sorry, I could not process that.';
-
-      this.chatHistory.push({ role: 'assistant', content: response });
-      dialogPart.push({ role: 'assistant', content: response });
-
-      this.chatService.pushMessagesWithMaxHistory(
-        chatId,
-        dialogPart,
-        this.MAX_HISTORY,
-      );
+      const response = await this.createResponse(dialogPart);
 
       return response;
     } catch (error) {
@@ -62,19 +51,28 @@ export class OpenaiService {
     }
   }
 
-  async getResponse(message: string): Promise<string> {
+  async getAIResponseWithChatHistory(
+    message: string,
+    chatId: number,
+  ): Promise<string> {
     try {
       const dialogPart = [];
-      dialogPart.push({ role: 'user', content: message });
 
-      const completion = await this.openai.chat.completions.create({
-        messages: dialogPart,
-        model: this.MODEL,
-      });
+      this.chatHistory = await this.chatService.getConversationHistory(chatId);
+      this.chatHistory.push({ role: 'user', content: message });
 
-      const response =
-        completion.choices[0].message.content ||
-        'Sorry, I could not process that.';
+      const response = await this.createResponse(this.chatHistory);
+
+      dialogPart.push(
+        { role: 'user', content: message },
+        { role: 'assistant', content: response },
+      );
+
+      this.chatService.pushMessagesWithMaxHistory(
+        chatId,
+        dialogPart,
+        this.MAX_HISTORY,
+      );
 
       return response;
     } catch (error) {
