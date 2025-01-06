@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { RedisClientType } from 'redis';
-import { CommandState } from '../telegram/interfaces/command-state.interface';
+import { CommandState } from './interfaces/command-state.interface';
 
 @Injectable()
 export class CommandStateService {

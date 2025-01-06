@@ -1,7 +1,7 @@
 import { Process, Processor } from '@nestjs/bull';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bull';
-import { TelegramService } from '../telegram.service';
+import { TelegramService } from '../../telegram/telegram.service';
 import { NotificationJobData } from '../interfaces/job.inteface';
 
 @Processor('notifications')

@@ -22,6 +22,7 @@ export interface DailyJobData extends BaseJobData {
 export interface DelayedJobData extends BaseJobData {
   type: 'delayed' | 'ai' | 'custom';
   delay?: number;
+  executeAt?: Date;
 }
 
 export interface NotificationJobData extends BaseJobData {
