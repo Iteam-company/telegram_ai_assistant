@@ -16,26 +16,17 @@ export class RemindersProcessor {
 
   @Process('daily-reminder')
   async handleDailyReminder(job: Job<ReminderJobData>) {
-    const { chatId, message } = job.data;
+    const { chatId, message, type } = job.data;
     try {
-      await this.telegramService.sendMessage(message, chatId);
+      // if (type === 'ai') {
+      const aiResponse = await this.openaiService.getAIResponse(message);
+      await this.telegramService.sendMessage(aiResponse, chatId);
+      // } else {
+      //   await this.telegramService.sendMessage(message, chatId);
+      // }
     } catch (error) {
       this.logger.error(
-        `Failed to send custom reminder to chat ${chatId}: ${error.message}`,
-      );
-      throw error;
-    }
-  }
-
-  @Process('ai-reminder')
-  async handleAIReminder(job: Job<ReminderJobData>) {
-    const { chatId, message } = job.data;
-    try {
-      const openaiResponce = await this.openaiService.getAIResponse(message);
-      await this.telegramService.sendMessage(openaiResponce, chatId);
-    } catch (error) {
-      this.logger.error(
-        `Failed to send daily reminder to chat ${chatId}: ${error.message}`,
+        `Failed to send reminder to chat ${chatId}: ${error.message}`,
       );
       throw error;
     }

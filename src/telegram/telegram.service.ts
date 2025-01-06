@@ -444,13 +444,37 @@ BOT> *Bot conformation*</code>
     return `The command '${command.command}' has been cancelled.`;
   }
 
-  private async handleAI(content) {
+  private async handleAI(content: string) {
     await this.sendChatAction('typing');
-    const gptResponse = await this.openaiService.getAIResponseWithChatHistory(
+    const response = await this.openaiService.getAIResponseWithChatHistory(
       content,
       this.chatId,
     );
-    return gptResponse;
+
+    // Check if response contains a command
+    const lines = response.split('\n');
+    let commandLine = lines.find((line) => line.startsWith('/'));
+
+    if (commandLine) {
+      // Remove the command line from the response
+      const userResponse = lines
+        .filter((line) => !line.startsWith('/'))
+        .join('\n');
+
+      // Send the friendly response first
+      await this.sendMessage(userResponse);
+
+      // Execute the command
+      const { command, content: commandContent } =
+        this.parseCommand(commandLine);
+      const handler = this.commands.get(command);
+      if (handler) {
+        const commandResponse = await handler.call(this, commandContent);
+        return commandResponse;
+      }
+    }
+
+    return response;
   }
 
   private async handleHistoryReset() {

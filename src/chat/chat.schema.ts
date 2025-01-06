@@ -2,7 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
 export interface Message {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp?: Date;
 }
@@ -18,7 +18,7 @@ export class Chat extends Document {
   @Prop({
     type: [
       {
-        role: { type: String, enum: ['user', 'assistant'] },
+        role: { type: String, enum: ['user', 'assistant', 'system'] },
         content: String,
         timestamp: { type: Date, required: false },
       },
