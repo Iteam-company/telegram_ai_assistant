@@ -458,35 +458,77 @@ export class TelegramService {
   }
 
   private handleStart() {
-    return "Welcome👋! I am a bot🤖 powered by ChatGPT. Ask me anything!\nType '/help' to get a list of commands or click 'menu' for a shortcuts.";
+    return `
+Welcome to your AI Assistant! 🤖
+
+I'm an AI-powered bot designed to help you manage your time and reminders while maintaining natural conversations. You can:
+
+💬 Chat naturally with me about any topic
+⏰ Set reminders using natural language
+📅 Schedule daily events
+🗓️ Plan one-time events
+📋 Manage your reminders
+
+Simply tell me what you need in plain language. For example:
+- "Remind me to call mom in 30 minutes"
+- "I need to take medicine every day at 9am"
+- "Set a reminder for my dentist appointment next Monday at 2pm"
+- "What reminders do I have?"
+- "Remove my reminder about the gym tomorrow"
+
+Type /help to see detailed instructions and available commands.
+
+Let's get started! How can I assist you today?
+`;
   }
 
   private handleHelp() {
     return `
-<u>Bot features:</u> conversation with AI, setting/unsetting/listing of everyday scheduled reminders, setting/unsetting one-time reminders.
+🤖 AI Assistant Guide
 
-For conversation with AI just type your messages in chat, just like chating with real person.
-This bot supports only text inputs. Commands support oneline input:
-<code>USER> "/remind 5 Tea is ready!"
-BOT> *Bot conformation*</code>
-and/or two-step input:
-<code>USER> "/remind"
-BOT> *TIP FOR COMMAND USING*
-USER> "5 Tea is ready!"
-BOT> *Bot conformation*</code>
+I understand natural language and can help you with:
 
-<u>Command list:</u>
-/help - Show all available commands 🤖
+📱 Chat & Reminders:
+- Just chat naturally about any topic
+- Ask me to set reminders in plain language
+- Request to modify or remove reminders
+- Ask about your current reminders
 
-/schedule [HH:MM] [message] - Set a daily reminder (e.g., <code>"/schedule 09:30 Morning meeting"</code>) 🕒
-/list_scheduled - View all your scheduled daily messages 📋
-/_del_[ID] - Remove a scheduled message by clicking the command under it 🗑
+Examples of natural interactions:
+"Can you remind me to check my emails in 2 hours?"
+➜ I'll set a reminder for you to check your emails in 2 hours.
+   /delayed 120 Check emails
 
-/remind [minutes] [message] - Set a one-time reminder (e.g., <code>"/remind 30 Take medicine"</code>) ⏰
-/_rem_[ID] - Remove a reminder by clicking the command under it ❌
+"I have yoga classes every morning at 7"
+➜ I'll set up a daily reminder for your yoga classes.
+   /daily 07:00 Time for yoga class
 
-/reset_history - Clear chat history with AI 🧹
-/cancel - Cancel current command 🚫
+"What reminders do I have for tomorrow?"
+➜ I'll check your scheduled reminders.
+   /list_scheduled
+
+"Remove all my reminders for tomorrow"
+➜ I'll help you remove all reminders scheduled for tomorrow.
+   /remove_range 01.01.2025 00:00 01.01.2025 23:59
+
+"Remove my reminder about washing the car tomorrow"
+➜ I'll help you find and remove the reminder about washing the car scheduled for tomorrow.
+   /find_and_delete Car washing tomorrow
+
+📋 Available Commands:
+/daily - Set daily reminder (e.g., "09:30 Morning meeting")
+/once - Set one-time reminder (e.g., "25.12.2024 10:00 Christmas breakfast")
+/delayed - Set reminder in minutes (e.g., "30 Check laundry")
+/list_scheduled - View all your reminders
+/remove_nearest - Remove next upcoming reminder
+/remove_range - Remove reminders in time range
+/find_and_delete - Remove specific reminder by description
+/reset_history - Clear chat history
+/cancel - Cancel current command
+
+Remember, you don't need to use these commands directly - just tell me what you need in natural language, and I'll handle the rest!
+
+Is there anything specific you'd like help with?
 `;
   }
 
