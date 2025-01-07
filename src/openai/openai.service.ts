@@ -32,10 +32,15 @@ export class OpenaiService {
 /daily [HH:MM] [message] - For daily recurring reminders
 /delayed [minutes] [message] - For reminders after X minutes
 /list_scheduled - To show all reminders
+/_rem_[ID] - Remove specific reminder
+/_del_[ID] - Remove specific daily reminder
+/remove_range [DD.MM.YYYY HH:MM] [DD.MM.YYYY HH:MM] - Remove reminders in time range
+/remove_nearest - Remove nearest upcoming reminder
+/find_and_delete [description] - Remove reminder by it description
 
 When users express intent to set reminders or schedules in natural language, analyze their request and respond with TWO parts:
 1. A friendly confirmation of understanding
-2. The appropriate command in a new line
+2. The appropriate command on a new line
 
 Examples:
 User: "remind me to call mom in 30 minutes"
@@ -48,13 +53,34 @@ Response: I'll set a daily reminder for your medicine.
 
 User: "remind me about the meeting tomorrow at 3pm"
 Response: I'll set a reminder for your meeting tomorrow at 3 PM.
-/once 07.01.2024 15:00 Meeting reminder
+/once 01.01.2025 15:00 Meeting reminder
 
 User: "what are my current reminders?"
 Response: I'll show you all your scheduled reminders.
 /list_scheduled
 
-For all other conversations, engage naturally and helpfully. Always maintain a friendly and professional tone.`;
+Add related contex to the reminders based on conversation. With user's request also will be sended current time and date ("[USER's REQUEST]. Current date-time: [CURRENT DATE-TIME]"), use it to understand when and how to set reminders.
+
+User: "delete all my reminders for tomorrow"
+Response: I'll help you remove all reminders scheduled for tomorrow.
+/remove_range 01.01.2025 00:00 01.01.2025 23:59
+
+User: "cancel my next reminder"
+Response: I'll remove your nearest upcoming reminder.
+/remove_nearest
+
+For reminder removal requests, make sure to suggest listing reminders first if the user might want to review them (only if they want to review them, don't bother them with schedule listing).
+
+When users want to delete specific reminders, first check if you need the list of current reminders.
+Then, when they describe which reminder to delete, use:
+/find_and_delete [description]
+
+Example:
+User: "remove my medicine reminder at 9am"
+Response: I'll help you find and remove the medicine reminder.
+/find_and_delete medicine reminder at 9am
+
+For all other conversations, engage naturally and helpfully. Always maintain a friendly and professional tone. Respond to users in the language they use to request you.`;
 
   private readonly REMINDER_SYSTEM_PROMPT = `You are a helpful AI assistant delivering a scheduled reminder. Your responses should be:
 1. Contextual to the reminder's purpose
@@ -71,7 +97,7 @@ Response: "Hey! This is your reminder to call your mom. Don't forget to ask abou
 Reminder: "Team meeting"
 Response: "Time for your team meeting! Don't forget to bring up any important points you've noted. Good luck with your discussion! 🤝"
 
-Keep responses concise but friendly, and always relevant to the reminder's context.`;
+Keep responses concise but friendly, and always relevant to the reminder's context. Respond in the same language as the reminder setted.`;
 
   async createResponse(messages: Omit<Message, 'timestamp'>[]) {
     const completion = await this.openai.chat.completions.create({
@@ -108,6 +134,8 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
     chatId: number,
   ): Promise<string> {
     try {
+      const messageWithDateTime = message + Date().toLocaleString();
+
       const dialogPart: {
         role: 'user' | 'assistant' | 'system';
         content: string;
@@ -118,15 +146,16 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
       // Add history after system prompt
       dialogPart.push(...this.chatHistory);
       // Add current message
-      dialogPart.push({ role: 'user', content: message });
+      dialogPart.push({ role: 'user', content: messageWithDateTime });
 
       const response = await this.createResponse(dialogPart);
+      console.log(response);
 
       // Save only user-assistant exchanges, not the system prompt
       this.chatService.pushMessagesWithMaxHistory(
         chatId,
         [
-          { role: 'user', content: message },
+          { role: 'user', content: messageWithDateTime },
           { role: 'assistant', content: response },
         ],
         this.MAX_HISTORY,
@@ -137,6 +166,23 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
       this.logger.error('OpenAI API Error:', error);
       const status = error.response?.status || error.status || 500;
       throw new OpenAIException(error.message, error, status);
+    }
+  }
+
+  async getAIDecision(prompt: string): Promise<string> {
+    try {
+      const response = await this.createResponse([
+        {
+          role: 'system',
+          content:
+            'You are a precise decision-making assistant. Respond only with the exact command or specified keywords.',
+        },
+        { role: 'user', content: prompt },
+      ]);
+      return response.trim();
+    } catch (error) {
+      this.logger.error('OpenAI API Error:', error);
+      throw new OpenAIException(error.message, error, error.status || 500);
     }
   }
 }

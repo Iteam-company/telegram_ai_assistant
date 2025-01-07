@@ -31,7 +31,7 @@ export class TelegramService {
     (string?) => Promise<string> | string
   >();
   private chatId: number;
-  private inactiveMinutesThreshold: number = 5;
+  private inactiveMinutesThreshold: number = 120;
 
   constructor(
     private httpService: HttpService,
@@ -63,6 +63,9 @@ export class TelegramService {
     this.commands.set('/once', this.handleOnce);
     this.commands.set('/daily', this.handleDaily);
     this.commands.set('/delayed', this.handleDelayed);
+    this.commands.set('/remove_range', this.handleRemoveRange);
+    this.commands.set('/remove_nearest', this.handleNearestReminder);
+    this.commands.set('/find_and_delete', this.handleFindAndDeleteReminder);
   }
 
   async sendMessage(text: string, specificChatId?: number): Promise<boolean> {
@@ -389,6 +392,60 @@ export class TelegramService {
     );
 
     return { jobId: job.id, executeAt };
+  }
+
+  private async findUserReminders(range?: { start: Date; end: Date }) {
+    // Get all user's reminders (both delayed and scheduled)
+    const repeatableJobs = await this.remindersQueue.getRepeatableJobs();
+    const dailyJobs = repeatableJobs.filter((job) =>
+      job.id?.startsWith(`${this.chatId}`),
+    );
+
+    const delayedJobs = await this.messagesQueue.getJobs([
+      'delayed',
+      'waiting',
+      'active',
+    ]);
+    const onceJobs = delayedJobs.filter(
+      (job) =>
+        job.data.chatId === this.chatId &&
+        ['once', 'delayed'].includes(job.data.type),
+    );
+
+    // If range is provided, filter jobs within that range
+    if (range) {
+      return {
+        dailyJobs: dailyJobs.filter((job) => {
+          const [minutes, hours] = job.cron.split(' ');
+          const jobTime = new Date();
+          jobTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+          return jobTime >= range.start && jobTime <= range.end;
+        }),
+        onceJobs: onceJobs.filter((job) => {
+          const executeAt = new Date(job.data.executeAt);
+          return executeAt >= range.start && executeAt <= range.end;
+        }),
+      };
+    }
+
+    return { dailyJobs, onceJobs };
+  }
+
+  private async removeReminders(reminders: {
+    dailyJobs: any[];
+    onceJobs: any[];
+  }) {
+    const removedDaily = await Promise.all(
+      reminders.dailyJobs.map((job) =>
+        this.remindersQueue.removeRepeatableByKey(job.key),
+      ),
+    );
+
+    const removedOnce = await Promise.all(
+      reminders.onceJobs.map((job) => job.remove()),
+    );
+
+    return removedDaily.length + removedOnce.length;
   }
 
   private validateDateTime(date: Date): void {
@@ -736,6 +793,145 @@ BOT> *Bot conformation*</code>
       );
     }
   }
+
+  private async handleBulkRemoveReminders(range: {
+    start: Date;
+    end: Date;
+  }): Promise<string> {
+    const reminders = await this.findUserReminders(range);
+    const count = await this.removeReminders(reminders);
+    return `✅ Successfully removed ${count} reminder${count !== 1 ? 's' : ''}.`;
+  }
+
+  private async handleNearestReminder(): Promise<string> {
+    const { dailyJobs, onceJobs } = await this.findUserReminders();
+
+    const now = new Date();
+    let nearest: { job: any; time: Date; type: 'daily' | 'once' } | null = null;
+
+    // Check daily jobs
+    dailyJobs.forEach((job) => {
+      const [minutes, hours] = job.cron.split(' ');
+      const jobTime = new Date();
+      jobTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+      if (jobTime < now) jobTime.setDate(jobTime.getDate() + 1);
+
+      if (!nearest || jobTime < nearest.time) {
+        nearest = { job, time: jobTime, type: 'daily' };
+      }
+    });
+
+    // Check once jobs
+    onceJobs.forEach((job) => {
+      const jobTime = new Date(job.data.executeAt);
+      if (jobTime > now && (!nearest || jobTime < nearest.time)) {
+        nearest = { job, time: jobTime, type: 'once' };
+      }
+    });
+
+    if (!nearest) {
+      throw new TelegramWarningException('No upcoming reminders found.');
+    }
+
+    if (nearest.type === 'daily') {
+      await this.remindersQueue.removeRepeatableByKey(nearest.job.key);
+    } else {
+      await nearest.job.remove();
+    }
+
+    return `✅ Successfully removed the nearest reminder scheduled for ${nearest.time.toLocaleString()}.`;
+  }
+
+  private async handleRemoveRange(content: string): Promise<string> {
+    if (!content) {
+      throw new TelegramWarningException(
+        'Please provide start and end dates. Format: /remove_range DD.MM.YYYY HH:MM DD.MM.YYYY HH:MM',
+      );
+    }
+
+    //TODO
+    const firstAndRest = StringParser.getFirstAndRest(content, ' ', 2);
+    const start = StringParser.parseDateTime(firstAndRest.first);
+    const end = StringParser.parseDateTime(firstAndRest.rest);
+
+    return await this.handleBulkRemoveReminders({ start, end });
+  }
+
+  private async getFormattedRemindersForAI(): Promise<string> {
+    const { dailyJobs, onceJobs } = await this.findUserReminders();
+    const delayedJobs = await this.remindersQueue.getDelayed();
+
+    let remindersList = 'Current reminders:\n';
+
+    // Format daily reminders
+    if (dailyJobs.length > 0) {
+      remindersList += '\nDaily reminders:\n';
+      await Promise.all(
+        dailyJobs.map(async (job) => {
+          const relatedJob = delayedJobs.find(
+            (delayed) =>
+              delayed.opts.repeat.key ===
+              `daily-reminder:${job.id}:::${job.cron}`,
+          );
+          const jobData = relatedJob.data;
+          const { rest: jobId } = StringParser.getFirstAndRest(job.id, '_');
+          remindersList += `- Daily at ${jobData.time}: "${jobData.message}" (ID: ${jobId})\n`;
+        }),
+      );
+    }
+
+    // Format one-time reminders
+    if (onceJobs.length > 0) {
+      remindersList += '\nOne-time reminders:\n';
+      onceJobs.forEach((job) => {
+        const executeAt = new Date(job.data.executeAt);
+        remindersList += `- ${executeAt.toLocaleString()}: "${job.data.message}" (ID: ${job.id})\n`;
+      });
+    }
+
+    return remindersList;
+  }
+
+  private async handleFindAndDeleteReminder(
+    description: string,
+  ): Promise<string> {
+    const reminders = await this.getFormattedRemindersForAI();
+
+    const prompt = `Given this list of user's reminders:
+  ${reminders}
+  
+  User wants to delete this reminder: "${description}"
+  Analyze the reminders and determine which one matches the user's description.
+  If you find a matching reminder, respond with ONLY the command to delete it:
+  For daily reminders use: /_del_ID
+  For one-time reminders use: /_rem_ID
+  If no matching reminder is found, respond with: NO_MATCH
+  If multiple reminders might match, respond with: MULTIPLE_MATCHES`;
+
+    const aiResponse = await this.openaiService.getAIDecision(prompt);
+
+    if (aiResponse === 'NO_MATCH') {
+      throw new TelegramWarningException(
+        'I could not find a reminder matching your description. Please check your current reminders with /list_scheduled',
+      );
+    }
+
+    if (aiResponse === 'MULTIPLE_MATCHES') {
+      return `I found multiple reminders that might match your description. Please check the list and use the specific ID to delete:\n${reminders}`;
+    }
+
+    // Execute the deletion command
+    const { command, content } = this.parseCommand(aiResponse);
+    const handler = this.commands.get(command);
+    if (handler) {
+      return await handler.call(this, content);
+    }
+
+    throw new TelegramWarningException(
+      'Something went wrong. Please try again.',
+    );
+  }
+
   @Cron(CronExpression.EVERY_HOUR)
   async checkInactiveUsers() {
     const inactiveChats = await this.chatService.getInactiveChats(
