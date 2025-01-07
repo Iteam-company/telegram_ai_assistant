@@ -99,4 +99,8 @@ export class StringParser {
     }
     return true;
   }
+
+  // TODO
+  // Parser for date-time range parsing:
+  // /remove_range 01.01.2025 00:00 01.01.2025 23:59
 }

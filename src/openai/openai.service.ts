@@ -32,8 +32,8 @@ export class OpenaiService {
 /daily [HH:MM] [message] - For daily recurring reminders
 /delayed [minutes] [message] - For reminders after X minutes
 /list_scheduled - To show all reminders
-/_rem_[ID] - Remove specific reminder
-/_del_[ID] - Remove specific daily reminder
+/_rem_[ID] or /nevermind [ID] - Remove specific reminder
+/_del_[ID] or /unschedule [ID] - Remove specific daily reminder
 /remove_range [DD.MM.YYYY HH:MM] [DD.MM.YYYY HH:MM] - Remove reminders in time range
 /remove_nearest - Remove nearest upcoming reminder
 /find_and_delete [description] - Remove reminder by it description
