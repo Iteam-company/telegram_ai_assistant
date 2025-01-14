@@ -15,11 +15,11 @@ async function bootstrap() {
     new GlobalExceptionsFilter(httpAdapter, telegramService),
   );
 
-  app.useGlobalInterceptors(new TimeoutInterceptor(5000));
+  app.useGlobalInterceptors(new TimeoutInterceptor(10000));
 
-  const webhookUrl = `${process.env.NGROK_URL}/telegram/webhook`;
+  const webhookUrl = `${process.env.HOST}/telegram/webhook`;
   await telegramService.setWebhook(webhookUrl);
 
-  await app.listen(process.env.APP_PORT ?? 8888);
+  await app.listen(process.env.PORT ?? 8888);
 }
 bootstrap();

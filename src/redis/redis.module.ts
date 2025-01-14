@@ -10,7 +10,8 @@ import { CommandStateService } from './command-state.service';
       provide: 'REDIS_CLIENT',
       useFactory: async (configService: ConfigService) => {
         const client = createClient({
-          url: `redis://${configService.get('REDIS_HOST', 'localhost')}:${configService.get('REDIS_PORT', 6379)}`,
+          // url: `redis://${configService.get('REDIS_HOST', 'localhost')}:${configService.get('REDIS_PORT', 6379)}`,
+          url: `rediss://${configService.get('REDIS_USER', 'localhost')}:${configService.get('REDIS_PASSWORD', 'localhost')}@${configService.get('REDIS_HOST', 'localhost')}:${configService.get('REDIS_PORT', 'localhost')}`,
         });
         await client.connect();
         return client;

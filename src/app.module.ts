@@ -44,6 +44,11 @@ import { RedisModule } from './redis/redis.module';
         redis: {
           host: configService.get('REDIS_HOST', 'localhost'),
           port: configService.get('REDIS_PORT', 6379),
+          username: configService.get('REDIS_USER', 'username'),
+          password: configService.get('REDIS_PASSWORD', 'password'),
+          tls: {
+            rejectUnauthorized: false,
+          },
         },
       }),
       inject: [ConfigService],
