@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { OpenAIException } from '../common/exceptions/openai.exception';
 import { ChatService } from 'src/chat/chat.service';
 import { Message } from 'src/chat/chat.schema';
+import { timestampToUTCString } from 'src/common/utils/timestamp-utc';
 
 @Injectable()
 export class OpenaiService {
@@ -132,7 +133,7 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
   async getAIResponseWithChatHistory(
     message: string,
     chatId: number,
-    currentTime: string = Date().toLocaleString(),
+    currentTime: string = timestampToUTCString(Date.now() / 1000),
   ): Promise<string> {
     try {
       const messageWithDateTime =

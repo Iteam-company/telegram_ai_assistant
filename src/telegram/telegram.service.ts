@@ -22,6 +22,7 @@ import { CommandStateService } from 'src/redis/command-state.service';
 import { CommandState } from '../redis/interfaces/command-state.interface';
 import { TelegramMyChatMember } from './interfaces/telegram-my-chat-member.interface';
 import { StringParser } from 'src/common/utils/string-parser';
+import { timestampToUTCString } from 'src/common/utils/timestamp-utc';
 
 @Injectable()
 export class TelegramService {
@@ -141,7 +142,7 @@ export class TelegramService {
       update.callback_query?.message.chat.id ||
       update.my_chat_member?.chat.id;
 
-    this.usersDate = new Date(update.message?.date * 1000).toLocaleString();
+    this.usersDate = timestampToUTCString(update.message.date);
 
     await this.chatService.updateLastActivity(this.chatId);
 
@@ -978,17 +979,19 @@ Is there anything specific you'd like help with?
     );
   }
 
-  @Cron(CronExpression.EVERY_HOUR)
-  async checkInactiveUsers() {
-    const inactiveChats = await this.chatService.getInactiveChats(
-      this.inactiveMinutesThreshold,
-    );
-    for (const chat of inactiveChats) {
-      await this.notificationsQueue.add('inactivity', {
-        chatId: chat.chatId,
-        type: 'inactivity',
-        createdAt: new Date(),
-      });
-    }
-  }
+  // Disabled for now
+  // @Cron(CronExpression.EVERY_HOUR)
+  // async checkInactiveUsers() {
+  //   const inactiveChats = await this.chatService.getInactiveChats(
+  //     this.inactiveMinutesThreshold,
+  //   );
+  //   for (const chat of inactiveChats) {
+  //     await this.notificationsQueue.add('inactivity', {
+  //       chatId: chat.chatId,
+  //       type: 'inactivity',
+  //       createdAt: new Date(),
+  //     });
+  //     this.chatService.updateLastActivity(chat.chatId);
+  //   }
+  // }
 }
