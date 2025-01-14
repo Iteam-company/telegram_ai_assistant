@@ -32,6 +32,7 @@ export class TelegramService {
   >();
   private chatId: number;
   private inactiveMinutesThreshold: number = 120;
+  private usersDate: string;
 
   constructor(
     private httpService: HttpService,
@@ -139,6 +140,8 @@ export class TelegramService {
       update.message?.chat.id ||
       update.callback_query?.message.chat.id ||
       update.my_chat_member?.chat.id;
+
+    this.usersDate = new Date(update.message?.date * 1000).toLocaleString();
 
     await this.chatService.updateLastActivity(this.chatId);
 
@@ -548,6 +551,7 @@ Is there anything specific you'd like help with?
     const response = await this.openaiService.getAIResponseWithChatHistory(
       content,
       this.chatId,
+      this.usersDate,
     );
 
     // Check if response contains a command

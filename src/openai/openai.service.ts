@@ -132,9 +132,11 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
   async getAIResponseWithChatHistory(
     message: string,
     chatId: number,
+    currentTime: string = Date().toLocaleString(),
   ): Promise<string> {
     try {
-      const messageWithDateTime = message + Date().toLocaleString();
+      const messageWithDateTime =
+        message + ` Current date-time: ${currentTime}`;
 
       const dialogPart: {
         role: 'user' | 'assistant' | 'system';
@@ -149,7 +151,6 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
       dialogPart.push({ role: 'user', content: messageWithDateTime });
 
       const response = await this.createResponse(dialogPart);
-      console.log(response);
 
       // Save only user-assistant exchanges, not the system prompt
       this.chatService.pushMessagesWithMaxHistory(
