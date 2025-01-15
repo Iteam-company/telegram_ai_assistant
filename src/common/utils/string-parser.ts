@@ -71,6 +71,8 @@ export class StringParser {
       const retDate = new Date(
         Date.UTC(year || now.getFullYear(), month - 1, day, hours, minutes),
       );
+
+      return retDate;
     } else {
       const [hours, minutes] = dateTimeStr.split(':').map(Number);
 
