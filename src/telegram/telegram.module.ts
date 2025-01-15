@@ -45,5 +45,6 @@ import { CleanupService } from '../redis/bull-cleanup.service';
     CleanupService,
   ],
   controllers: [TelegramController],
+  exports: [TelegramService],
 })
 export class TelegramModule {}

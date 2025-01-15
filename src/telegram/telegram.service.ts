@@ -22,7 +22,12 @@ import { CommandStateService } from 'src/redis/command-state.service';
 import { CommandState } from '../redis/interfaces/command-state.interface';
 import { TelegramMyChatMember } from './interfaces/telegram-my-chat-member.interface';
 import { StringParser } from 'src/common/utils/string-parser';
-import { timestampToUTCString } from 'src/common/utils/timestamp-utc';
+import {
+  convertToUserTime,
+  convertToUTC,
+  detectTimezone,
+  formatDateTime,
+} from 'src/common/utils/timestamp-utc';
 
 @Injectable()
 export class TelegramService {
@@ -33,7 +38,7 @@ export class TelegramService {
   >();
   private chatId: number;
   private inactiveMinutesThreshold: number = 120;
-  private usersDate: string;
+  private messageTimestamp: number;
 
   constructor(
     private httpService: HttpService,
@@ -68,6 +73,7 @@ export class TelegramService {
     this.commands.set('/remove_range', this.handleRemoveRange);
     this.commands.set('/remove_nearest', this.handleNearestReminder);
     this.commands.set('/find_and_delete', this.handleFindAndDeleteReminder);
+    this.commands.set('/set_timezone', this.handleSetTimeZone);
   }
 
   async sendMessage(text: string, specificChatId?: number): Promise<boolean> {
@@ -137,12 +143,12 @@ export class TelegramService {
   }
 
   async handleUpdate(update: TelegramUpdate) {
-    this.chatId =
-      update.message?.chat.id ||
-      update.callback_query?.message.chat.id ||
-      update.my_chat_member?.chat.id;
+    const messageType =
+      update.message || update.callback_query?.message || update.my_chat_member;
 
-    this.usersDate = timestampToUTCString(update.message.date);
+    this.chatId = messageType.chat.id;
+
+    this.messageTimestamp = messageType.date;
 
     await this.chatService.updateLastActivity(this.chatId);
 
@@ -240,26 +246,28 @@ export class TelegramService {
 
   private requiresResponse(command: string): boolean {
     const requiresResponseCommands = [
-      '/remind',
+      '/delayed',
       '/nevermind',
-      '/schedule',
-      '/unschedule',
       '/once',
       '/daily',
-      '/delayed',
+      '/unschedule',
+      '/remove_range',
+      '/find_and_delete',
+      '/set_timezone',
     ];
     return requiresResponseCommands.includes(command);
   }
 
   private supportsDirectInput(command: string): boolean {
     const supportsDirectInputCommands = [
-      '/remind',
+      '/delayed',
       '/nevermind',
-      '/schedule',
-      '/unschedule',
       '/once',
       '/daily',
-      '/delayed',
+      '/unschedule',
+      '/remove_range',
+      '/find_and_delete',
+      '/set_timezone',
     ];
     return supportsDirectInputCommands.includes(command);
   }
@@ -279,14 +287,22 @@ export class TelegramService {
 
   private getPromptForCommand(command: string): string {
     const prompts = {
-      '/remind':
+      '/delayed':
         'Please enter time in minutes and message (e.g. "30 Call Mom"). Or click /cancel to abort the command.',
       '/nevermind':
-        'Please enter the reminder-ID (e.g. "76"). Or click /cancel to abort the command.',
-      '/schedule':
+        'Please enter the ID of delayed or once reminder (e.g. "76"). Or click /cancel to abort the command.',
+      '/daily':
         'Please enter time (HH:MM) and message (e.g. "14:30 Daily standup"). Or click /cancel to abort the command.',
+      '/once':
+        'Please enter date (optionally), time and message (e.g. "01.01.2020 14:30 Daily standup"). Or click /cancel to abort the command.',
       '/unschedule':
-        'Please enter the schedule-ID from schedule list (e.g. "123456789-12-35"). Or click /cancel to abort the command.',
+        'Please enter the ID of daily reminder from schedule list (e.g. "12_35"). Or click /cancel to abort the command.',
+      '/remove_range':
+        'Please enter two date-times in format "DD.MM.YYYY HH:MM DD.MM.YYYY HH:MM". Click /cancel to abort this command.',
+      '/find_and_delete':
+        'Please describe the reminder you want to remove. It could be date, time or just description. Click /cancel to abort this command.',
+      '/set_timezone':
+        'Please provide you time or hour in format "HH:MM" or "HH". Click /cancel to abort this command.',
     };
     return prompts[command] || 'Please enter your response:';
   }
@@ -307,8 +323,21 @@ export class TelegramService {
     time: string,
     message: string,
   ): Promise<{ jobId: any; time: string }> {
+    const dateTime = StringParser.parseDateTime(time);
+
+    const offset = await this.chatService.getTimezoneOffset(this.chatId);
+    if (!offset) {
+      throw new TelegramWarningException(
+        `Your timezone doesn't set, so I can't correctly set the reminders or work with time🙈.\nPlease tell me you current time or hour like "my current time is 12:30" or "set my time zone, it's 2pm now". Or use /set_timezone [HH:MM | HH] command for that.`,
+      );
+    }
+    const utcDate = convertToUTC(dateTime, offset);
+
+    const hourUtc = utcDate.getHours();
+    const minuteUtc = utcDate.getMinutes();
+
     const [hours, minutes] = time.split(':').map(Number);
-    const cronPattern = `${minutes} ${hours} * * *`;
+    const cronPattern = `${minuteUtc} ${hourUtc} * * *`;
     const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
     const jobIdPart = `daily_${formattedTime.replace(':', '_')}`;
     const jobId = `${this.chatId}_${jobIdPart}`;
@@ -344,7 +373,15 @@ export class TelegramService {
     dateTime: Date,
     message: string,
   ): Promise<{ jobId: any; executeAt: Date }> {
-    const delay = dateTime.getTime() - Date.now();
+    const offset = await this.chatService.getTimezoneOffset(this.chatId);
+    if (!offset) {
+      throw new TelegramWarningException(
+        `Your timezone doesn't set, so I can't correctly set the reminders or work with time🙈.\nPlease tell me you current time or hour like "my current time is 12:30" or "set my time zone, it's 2pm now". Or use /set_timezone [HH:MM | HH] command for that.`,
+      );
+    }
+    const dateTimeUtc = convertToUTC(dateTime, offset);
+
+    const delay = dateTimeUtc.getTime() - Date.now();
 
     const job = await this.messagesQueue.add(
       'delayed',
@@ -375,6 +412,14 @@ export class TelegramService {
     const delay = minutes * 60 * 1000;
     const executeAt = new Date(Date.now() + delay);
 
+    const offset = await this.chatService.getTimezoneOffset(this.chatId);
+    if (!offset) {
+      throw new TelegramWarningException(
+        `Your timezone doesn't set, so I can't correctly set the reminders or work with time🙈.\nPlease tell me you current time or hour like "my current time is 12:30" or "set my time zone, it's 2pm now". Or use /set_timezone [HH:MM | HH] command for that.`,
+      );
+    }
+    const userDateTime = convertToUserTime(executeAt.getTime() / 1000, offset);
+
     const job = await this.messagesQueue.add(
       'delayed',
       {
@@ -395,7 +440,7 @@ export class TelegramService {
       },
     );
 
-    return { jobId: job.id, executeAt };
+    return { jobId: job.id, executeAt: userDateTime };
   }
 
   private async findUserReminders(range?: { start: Date; end: Date }) {
@@ -452,8 +497,16 @@ export class TelegramService {
     return removedDaily.length + removedOnce.length;
   }
 
-  private validateDateTime(date: Date): void {
-    const validate = StringParser.validateDateTime(date);
+  private async validateDateTime(date: Date): Promise<void> {
+    const offset = this.chatService.getTimezoneOffset(this.chatId);
+    if (!offset) {
+      throw new TelegramWarningException(
+        `Your timezone doesn't set, so I can't correctly set the reminders or work with time🙈.\nPlease tell me you current time or hour like "my current time is 12:30" or "set my time zone, it's 2pm now". Or use /set_timezone [HH:MM | HH] command for that.`,
+      );
+    }
+    const utcDate = convertToUTC(date, offset);
+
+    const validate = StringParser.validateDateTime(utcDate);
     if (!validate) {
       throw new TelegramWarningException(
         'Please specify future date and time.',
@@ -481,6 +534,8 @@ Simply tell me what you need in plain language. For example:
 - "Remove my reminder about the gym tomorrow"
 
 Type /help to see detailed instructions and available commands.
+
+To correctly set the reminders or work with time, I also need to know your current hour to set the timezone. So please, at start provide me you current time or hour in understandable form🤓.
 
 Let's get started! How can I assist you today?
 `;
@@ -528,6 +583,7 @@ Examples of natural interactions:
 /remove_range - Remove reminders in time range
 /find_and_delete - Remove specific reminder by description
 /reset_history - Clear chat history
+/set_timezone - Set you timezone by your current hour
 /cancel - Cancel current command
 
 Remember, you don't need to use these commands directly - just tell me what you need in natural language, and I'll handle the rest!
@@ -552,7 +608,7 @@ Is there anything specific you'd like help with?
     const response = await this.openaiService.getAIResponseWithChatHistory(
       content,
       this.chatId,
-      this.usersDate,
+      this.messageTimestamp,
     );
 
     // Check if response contains a command
@@ -604,7 +660,7 @@ Is there anything specific you'd like help with?
 
     const { jobId, executeAt } = await this.addOnceReminder(dateTime, message);
 
-    return `✅ One-time reminder set:\n"${message}"\nfor ${executeAt.toLocaleString()}\nTo remove click: /_rem_${jobId}`;
+    return `✅ One-time reminder set:\n"${message}"\nfor ${formatDateTime(executeAt)}\nTo remove click: /_rem_${jobId}`;
   }
 
   private async handleDaily(content: string): Promise<string> {
@@ -659,7 +715,7 @@ Is there anything specific you'd like help with?
       message,
     );
 
-    return `✅ Reminder set:\n"${message}"\nfor ${executeAt.toLocaleString()}\nTo remove click: /_rem_${jobId}`;
+    return `✅ Reminder set:\n"${message}"\nfor ${formatDateTime(executeAt)}\nTo remove click: /_rem_${jobId}`;
   }
 
   private async handleRemoveReminder(jobId: string): Promise<string> {
@@ -896,10 +952,9 @@ Is there anything specific you'd like help with?
       );
     }
 
-    //TODO
-    const firstAndRest = StringParser.getFirstAndRest(content, ' ', 2);
-    const start = StringParser.parseDateTime(firstAndRest.first);
-    const end = StringParser.parseDateTime(firstAndRest.rest);
+    const startEndDateTime = StringParser.getDateAndOrTimeGlobal(content);
+    const start = startEndDateTime[0];
+    const end = startEndDateTime[1];
 
     return await this.handleBulkRemoveReminders({ start, end });
   }
@@ -977,6 +1032,28 @@ Is there anything specific you'd like help with?
     throw new TelegramWarningException(
       'Something went wrong. Please try again.',
     );
+  }
+
+  private async handleSetTimeZone(content: string): Promise<string> {
+    if (!content) {
+      throw new TelegramWarningException(
+        'Please provide time or hour. Format: /set_timezone HH:MM or HH',
+      );
+    }
+
+    const time = StringParser.getTimeOrHour(content);
+    if (!time) {
+      throw new TelegramWarningException(
+        'Please provide time or hour. Format: /set_timezone HH:MM or HH',
+      );
+    }
+
+    const hour = parseInt(time.split(':')[0]);
+    const offset = detectTimezone(hour);
+
+    await this.chatService.setTimezoneOffset(this.chatId, offset);
+
+    return 'Your timezone is set!';
   }
 
   // Disabled for now

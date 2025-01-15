@@ -1,6 +1,10 @@
 export class StringParser {
   static dateAndOrTimeRegex =
     /^((0?[1-9]|[12][0-9]|3[01])[\/\-\.](0?[1-9]|1[012])[\/\-\.](2?\d{3})\s(([0-1]?[0-9]|2[0-3]):[0-5][0-9])|(([0-1]?[0-9]|2[0-3]):[0-5][0-9]))/;
+  static dateAndOrTimeRegexGlobal =
+    /((0?[1-9]|[12][0-9]|3[01])[\/\-\.](0?[1-9]|1[012])[\/\-\.](2?\d{3})\s(([0-1]?[0-9]|2[0-3]):[0-5][0-9])|(([0-1]?[0-9]|2[0-3]):[0-5][0-9]))/g; // GLOBAL WITHOUT START ANCHOR
+  static timeOrHourRegex =
+    /(([0-1]?[0-9]|2[0-3]):[0-5][0-9])|([0-1]?[0-9]|2[0-3])/;
   static underscoreCommandsRegex = /^\/\_[a-zA-Z]+\_/;
 
   static nthIndexOf(str, pat, n) {
@@ -65,23 +69,19 @@ export class StringParser {
       const [hours, minutes] = timeStr.split(':').map(Number);
 
       const retDate = new Date(
-        year || now.getFullYear(),
-        month - 1,
-        day,
-        hours,
-        minutes,
+        Date.UTC(year || now.getFullYear(), month - 1, day, hours, minutes),
       );
-
-      return retDate;
     } else {
       const [hours, minutes] = dateTimeStr.split(':').map(Number);
 
       const retDate = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-        hours,
-        minutes,
+        Date.UTC(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          hours,
+          minutes,
+        ),
       );
 
       return retDate;
@@ -92,6 +92,14 @@ export class StringParser {
     return str.match(this.dateAndOrTimeRegex)[0];
   }
 
+  static getDateAndOrTimeGlobal(str) {
+    return str.match(this.dateAndOrTimeRegexGlobal);
+  }
+
+  static getTimeOrHour(str) {
+    return str.match(this.timeOrHourRegex)[0];
+  }
+
   static validateDateTime(date: Date): boolean {
     const now = new Date();
     if (date.getTime() < now.getTime()) {
@@ -99,8 +107,4 @@ export class StringParser {
     }
     return true;
   }
-
-  // TODO
-  // Parser for date-time range parsing:
-  // /remove_range 01.01.2025 00:00 01.01.2025 23:59
 }

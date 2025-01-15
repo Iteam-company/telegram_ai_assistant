@@ -4,7 +4,12 @@ import OpenAI from 'openai';
 import { OpenAIException } from '../common/exceptions/openai.exception';
 import { ChatService } from 'src/chat/chat.service';
 import { Message } from 'src/chat/chat.schema';
-import { timestampToUTCString } from 'src/common/utils/timestamp-utc';
+import {
+  convertToUserTime,
+  formatDateTime,
+  timestampToUTCString,
+} from 'src/common/utils/timestamp-utc';
+import { TelegramWarningException } from 'src/common/exceptions/telegram.exception';
 
 @Injectable()
 export class OpenaiService {
@@ -38,6 +43,7 @@ export class OpenaiService {
 /remove_range [DD.MM.YYYY HH:MM] [DD.MM.YYYY HH:MM] - Remove reminders in time range
 /remove_nearest - Remove nearest upcoming reminder
 /find_and_delete [description] - Remove reminder by it description
+/set_timezone [HH:MM] or /set_timezone [HH] - Set user's timezone offset
 
 When users express intent to set reminders or schedules in natural language, analyze their request and respond with TWO parts:
 1. A friendly confirmation of understanding
@@ -60,7 +66,7 @@ User: "what are my current reminders?"
 Response: I'll show you all your scheduled reminders.
 /list_scheduled
 
-Add related contex to the reminders based on conversation. With user's request also will be sended current time and date ("[USER's REQUEST]. Current date-time: [CURRENT DATE-TIME]"), use it to understand when and how to set reminders.
+Add related contex to the reminders based on conversation. With user's request also will be sended current time and date ("[USER's REQUEST]. Current user's date-time: [CURRENT DATE-TIME]"), use it to understand when and how to set reminders. If user telling you his a hour or time or want to set (change) his time zone, use /set_timezone [HH:MM | HH] command with the time or hour that user provide to you. Ask only about time or hour, don't ask about timezones or time differences. If you get "Current user's date-time: TIME-ZONE NOT SET!" then tell user to tell his current time or hour to set the time zone.
 
 User: "delete all my reminders for tomorrow"
 Response: I'll help you remove all reminders scheduled for tomorrow.
@@ -131,13 +137,22 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
   }
 
   async getAIResponseWithChatHistory(
-    message: string,
+    msg: string,
     chatId: number,
-    currentTime: string = timestampToUTCString(Date.now() / 1000),
+    currentTimestamp?: number,
   ): Promise<string> {
     try {
-      const messageWithDateTime =
-        message + ` Current date-time: ${currentTime}`;
+      let message = msg;
+      if (currentTimestamp) {
+        const offset = await this.chatService.getTimezoneOffset(chatId);
+        if (!offset) {
+          message += ` Current user's date-time: TIME-ZONE NOT SET!`;
+        } else {
+          const convertedDateTime = convertToUserTime(currentTimestamp, offset);
+          const usersTime = formatDateTime(convertedDateTime);
+          message += ` Current user's date-time: ${usersTime}`;
+        }
+      }
 
       const dialogPart: {
         role: 'user' | 'assistant' | 'system';
@@ -149,7 +164,7 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
       // Add history after system prompt
       dialogPart.push(...this.chatHistory);
       // Add current message
-      dialogPart.push({ role: 'user', content: messageWithDateTime });
+      dialogPart.push({ role: 'user', content: message });
 
       const response = await this.createResponse(dialogPart);
 
@@ -157,7 +172,7 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
       this.chatService.pushMessagesWithMaxHistory(
         chatId,
         [
-          { role: 'user', content: messageWithDateTime },
+          { role: 'user', content: message },
           { role: 'assistant', content: response },
         ],
         this.MAX_HISTORY,
@@ -165,6 +180,9 @@ Keep responses concise but friendly, and always relevant to the reminder's conte
 
       return response;
     } catch (error) {
+      if (error instanceof TelegramWarningException) {
+        throw error;
+      }
       this.logger.error('OpenAI API Error:', error);
       const status = error.response?.status || error.status || 500;
       throw new OpenAIException(error.message, error, status);

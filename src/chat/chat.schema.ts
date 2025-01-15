@@ -15,6 +15,9 @@ export class Chat extends Document {
   @Prop({ default: Date.now })
   lastActivity: Date;
 
+  @Prop({ default: null })
+  userTimeZone: number;
+
   @Prop({
     type: [
       {

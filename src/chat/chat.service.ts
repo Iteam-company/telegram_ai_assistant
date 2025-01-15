@@ -98,4 +98,16 @@ export class ChatService {
       isActive: true,
     });
   }
+
+  async getTimezoneOffset(chatId: number): Promise<number> {
+    const chat = await this.findOrCreateChat(chatId);
+
+    return chat.userTimeZone;
+  }
+
+  async setTimezoneOffset(chatId: number, offset: number): Promise<void> {
+    const chat = await this.findOrCreateChat(chatId);
+    chat.userTimeZone = offset;
+    await chat.save();
+  }
 }
